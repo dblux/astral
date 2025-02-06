@@ -70,7 +70,7 @@ qc_meta$Run.DateTime <- time_info[qc_sids, 'DateTime']
 qc_meta$Sample.Name <- qc_sids_short
 qc_meta$Polypeptide.Novogene.ID <- qc_sids_short
 expt_meta1 <- rbind(expt_meta, qc_meta)
-
+ 
 file <- 'data/astral/metadata/metadata-all.csv'
 metadata_all <- read.csv(file, row.names=1)
 
@@ -179,219 +179,218 @@ metadata_lyriks$final_label[metadata_lyriks$label == 'relapse']
 
 ##### EDA #####
 
-# Distribution of missingness
-pdf('tmp/fig/astral/features-pct-zero.pdf')
-hist(feature_pct_zero, breaks = 20)
-dev.off()
-
-sample_pct_zero <- colSums(data == 0) / nrow(data)
-qc <- cbind(metadata_all, pct_zero = sample_pct_zero)
-
-ax <- ggplot(qc) +
-  geom_point(
-    aes(x = study, y = pct_zero, color = class),
-    position = position_jitterdodge(jitter.width = 0.1, dodge.width = 0.8)
-  )
-file <- 'tmp/fig/astral/samples-pct-zero.pdf'
-ggsave(file, ax, width = 8, height = 5)
-
-# remove outliers with pct zero < 0.46
-sum(sample_pct_zero < 0.46)
-
-# plot distribution of protein expression
-long_data <- gather(data, key = 'sid', value = 'expression')
-long_data$class <- metadata_all[long_data$sid, 'class']
-long_data$study <- metadata_all[long_data$sid, 'study']
-
-ax <- ggplot(long_data) +
-  facet_wrap(~ study + class, nrow = 2, scales = 'free') +
-  geom_density(
-    aes(x = expression, group = sid, col = class),
-    alpha = 0.5
-  )
-file <- 'tmp/fig/astral/samples-density.pdf'
-ggsave(file, ax, width = 15, height = 5)
-
-# Filter out sparse features
-feat_nonsparse <- names(feature_pct_zero)[feature_pct_zero == 0]
-annot_nonsparse <- uniprot_annot[feat_nonsparse, ]
-write.csv(annot_nonsparse, 'tmp/astral/annot_nonsparse.csv')
-
-ax <- ggplot_pca(
-  data[feat_nonsparse, ], metadata_all,
-  color = 'class', shape = 'study'
-)
-ggsave('tmp/fig/astral/fltr223-pca-all.pdf', ax, width = 10, height = 6)
-
-# Plot: PCA elbow plot
-pca_obj <- prcomp(t(data))
-eigenvalues <- pca_obj$sdev ^ 2 / sum(pca_obj$sdev ^ 2)
-
-pdf('tmp/fig/astral/pca-elbow.pdf')
-plot(eigenvalues[1:20])
-dev.off()
-
-# Plot: Top PCs
-# increase dodge width
-ax <- ggplot_top_pc(
-  data, metadata_all,
-  'class', col = 'class', shape = 'study',
-  jitter.width = 0.4
-) +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
-ggsave('tmp/fig/astral/top_pcs.pdf', ax, width = 22, height = 8)
-
-# Plot: UMAP
-ax <- ggplot_umap(
-  data[feat_nonsparse, ], metadata_all,
-  col = 'class', shape = 'study',
-  cex = 1.5, alpha = 0.7
-)
-ggsave('tmp/fig/astral/fltr223-umap.pdf', ax, width = 8, height = 5)
-
-# Plot: Features (non-sparse)
-# Features: Fully present
-lyriks_feature_pct_zero <- rowSums(is.na(lyriks)) / ncol(lyriks)
-lyriks_sample_pct_zero <- colSums(is.na(lyriks)) / nrow(lyriks)
-
-# lyriks[1:5, 1:10]
-# lyriks_unnorm[1:5, 1:10]
-
-pct <- 0.1
-# idx <- lyriks_feature_pct_zero > pct & lyriks_feature_pct_zero <= (pct + 0.1)
-
-idx <- lyriks_feature_pct_zero == 0
-
-feats <- names(lyriks_feature_pct_zero)[idx]
-print(length(feats))
-set.seed(0)
-feats1 <- sample(feats, 50)
-
-for (i in feats1) {
-  x <- unlist(lyriks_unnorm[i, ])
-  data <- cbind(expr = x, metadata_lyriks)
-  ax <- ggplot(data) +
-    facet_wrap(~final_label, nrow = 1, scales = 'free_x') +
-    geom_point(
-      aes(y = expr, x = period, col = Run.DateTime, shape = Extraction.Date),
-      position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.8)
-    ) +
-    # scale_colour_viridis_d(option = 'plasma') +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1))
-  file <- sprintf('tmp/astral/fig/features/lyriks_unnorm-runtime-feat-%s.pdf', i)
-  ggsave(file, ax, width = 12, height = 3.5)
-  print(file)
-}
-
-for (i in feats1) {
-  x <- unlist(lyriks_unnorm[i, ])
-  data <- cbind(expr = x, metadata_lyriks)
-  ax <- subset(data, expr > 0 & Extraction.Date != 'Not applicable') %>%
-    ggplot() +
-      geom_density(
-        aes(x = expr, col = Extraction.Date, group = Extraction.Date)
-      ) # +
-      # scale_colour_viridis_d(option = 'plasma') +
-      # theme(axis.text.x = element_text(angle = 45, hjust = 1))
-  file <- sprintf('tmp/astral/fig/features/lyriks_unnorm-density-00-%s.pdf', i)
-  ggsave(file, ax, width = 6, height = 3.5)
-  print(file)
-}
-
-feature_avg <- apply(lyriks, 1, function(x) mean(x[x != 0]))
-data <- data.frame(pct_zero = lyriks_feature_pct_zero, avg = feature_avg)
-ax <- ggplot(data) +
-  geom_point(aes(x = avg, y = pct_zero))
-file <- 'tmp/astral/fig/feat-avg_pct_zero.pdf'
-ggsave(file, ax, width = 8, height = 5)
-
-# Plot: Missing values
-lyriks_sample_pct_zero <- colSums(is.na(lyriks1)) / nrow(lyriks1)
-sample_min <- apply(lyriks1, 2, min, na.rm = T)
-sample_avg <- colMeans(lyriks1, na.rm = T) 
-sample_sum <- colSums(lyriks1, na.rm = T) 
-identical(names(sample_min), colnames(lyriks1))
-
-sample_stats <- cbind(
-  min = sample_min, 
-  avg = sample_avg, 
-  sum = sample_sum,
-  pct_zero = lyriks_sample_pct_zero,
-  metadata_lyriks[colnames(lyriks1), ]
-)
-
-# Averages still differ for unnormalised data
-ax <- ggplot(sample_stats) +
-  geom_point(
-    aes(x = Extraction.Date, y = avg, col = Run.DateTime, shape = class.x),
-    position = position_jitterdodge(jitter.width = 0.1, dodge.width = 1)
-  ) +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
-file <- 'tmp/astral/fig/sample_unnorm-avg.pdf'
-ggsave(file, ax, width = 8, height = 5)
-
-# TODO: Plot
-ax <- ggplot(sample_stats) +
-  geom_point(
-    aes(x = Extraction.Date, y = pct_zero, col = Run.DateTime, shape = Class),
-    position = position_jitterdodge(jitter.width = 0.11, dodge.width = 0.8),
-    cex = 1,
-  ) +
-  labs(
-    x = 'Extraction date',
-    y = 'Percentage missing',
-    color = 'Run date',
-  ) +
-  theme(legend.key.size = unit(4, "mm")) +
-  guides(color = guide_colorbar(barheight = unit(10, "mm")))
-file <- 'tmp/astral/fig/sample-pct_na.pdf'
-ggsave(file, ax, width = 3, height = 1.8)
-
-ax <- ggplot(sample_stats) +
-  geom_point(
-    aes(x = pct_zero, y = avg, col = Extraction.Date),
-    cex = 1,
-  ) +
-  labs(
-    x = 'Percentage missing',
-    y = 'Average expression',
-    color = 'Extraction date',
-  ) +
-  theme(legend.key.size = unit(4, "mm"))
-file <- 'tmp/astral/fig/avg-pct_na.pdf'
-ggsave(file, ax, width = 3.2, height = 1.8)
-
-# Plot: MNAR relationship
-ext_date <- metadata_lyriks[colnames(lyriks1), 'Extraction.Date']
-lyriks_batches <- split_cols(lyriks1, ext_date)
-names(lyriks_batches)
-
-compute_stats <- function(x) {
-  data.frame(
-    pct_na = rowSums(is.na(x)) / ncol(x),
-    avg = rowMeans(x, na.rm = TRUE) 
-  )
-}
-list_stats <- lapply(lyriks_batches, compute_stats)
-list_stats1 <- lapply(names(list_stats), function(name) {
-  list_stats[[name]]['date'] <- name
-  return(list_stats[[name]])
-})
-mnar_stats <- do.call(rbind, list_stats1)
-mnar_stats[is.na(mnar_stats)] <- 0
-head(mnar_stats)
-
-ax <- ggplot(mnar_stats) +
-  geom_point(aes(x = avg, y = pct_na, color = date), cex = 1, shape = 1) +
-  labs(
-    x = 'Average expression',
-    y = 'Percentage missing',
-    color = 'Extraction date',
-  ) +
-  theme(legend.key.size = unit(4, "mm"))
-  # guides(color = guide_colorbar(barheight = unit(15, "mm")))
-file <- 'tmp/astral/fig/batches-avg_pct_na.pdf'
-ggsave(file, ax, width = 3.2, height = 1.8)
+# # Distribution of missingness
+# pdf('tmp/fig/astral/features-pct-zero.pdf')
+# hist(feature_pct_zero, breaks = 20)
+# dev.off()
+# 
+# sample_pct_zero <- colSums(data == 0) / nrow(data)
+# qc <- cbind(metadata_all, pct_zero = sample_pct_zero)
+# 
+# ax <- ggplot(qc) +
+#   geom_point(
+#     aes(x = study, y = pct_zero, color = class),
+#     position = position_jitterdodge(jitter.width = 0.1, dodge.width = 0.8)
+#   )
+# file <- 'tmp/fig/astral/samples-pct-zero.pdf'
+# ggsave(file, ax, width = 8, height = 5)
+# 
+# # remove outliers with pct zero < 0.46
+# sum(sample_pct_zero < 0.46)
+# 
+# # plot distribution of protein expression
+# long_data <- gather(data, key = 'sid', value = 'expression')
+# long_data$class <- metadata_all[long_data$sid, 'class']
+# long_data$study <- metadata_all[long_data$sid, 'study']
+# 
+# ax <- ggplot(long_data) +
+#   facet_wrap(~ study + class, nrow = 2, scales = 'free') +
+#   geom_density(
+#     aes(x = expression, group = sid, col = class),
+#     alpha = 0.5
+#   )
+# file <- 'tmp/fig/astral/samples-density.pdf'
+# ggsave(file, ax, width = 15, height = 5)
+# 
+# # Filter out sparse features
+# feat_nonsparse <- names(feature_pct_zero)[feature_pct_zero == 0]
+# annot_nonsparse <- uniprot_annot[feat_nonsparse, ]
+# write.csv(annot_nonsparse, 'tmp/astral/annot_nonsparse.csv')
+# 
+# ax <- ggplot_pca(
+#   data[feat_nonsparse, ], metadata_all,
+#   color = 'class', shape = 'study'
+# )
+# ggsave('tmp/fig/astral/fltr223-pca-all.pdf', ax, width = 10, height = 6)
+# 
+# # Plot: PCA elbow plot
+# pca_obj <- prcomp(t(data))
+# eigenvalues <- pca_obj$sdev ^ 2 / sum(pca_obj$sdev ^ 2)
+# 
+# pdf('tmp/fig/astral/pca-elbow.pdf')
+# plot(eigenvalues[1:20])
+# dev.off()
+# 
+# # Plot: Top PCs
+# # increase dodge width
+# ax <- ggplot_top_pc(
+#   data, metadata_all,
+#   'class', col = 'class', shape = 'study',
+#   jitter.width = 0.4
+# ) +
+#   theme(axis.text.x = element_text(angle = 45, hjust = 1))
+# ggsave('tmp/fig/astral/top_pcs.pdf', ax, width = 22, height = 8)
+# 
+# # Plot: UMAP
+# ax <- ggplot_umap(
+#   data[feat_nonsparse, ], metadata_all,
+#   col = 'class', shape = 'study',
+#   cex = 1.5, alpha = 0.7
+# )
+# ggsave('tmp/fig/astral/fltr223-umap.pdf', ax, width = 8, height = 5)
+# 
+# # Plot: Features (non-sparse)
+# # Features: Fully present
+# lyriks_feature_pct_zero <- rowSums(is.na(lyriks)) / ncol(lyriks)
+# lyriks_sample_pct_zero <- colSums(is.na(lyriks)) / nrow(lyriks)
+# 
+# # lyriks[1:5, 1:10]
+# # lyriks_unnorm[1:5, 1:10]
+# 
+# pct <- 0.1
+# # idx <- lyriks_feature_pct_zero > pct & lyriks_feature_pct_zero <= (pct + 0.1)
+# 
+# idx <- lyriks_feature_pct_zero == 0
+# 
+# feats <- names(lyriks_feature_pct_zero)[idx]
+# print(length(feats))
+# set.seed(0)
+# feats1 <- sample(feats, 50)
+# 
+# for (i in feats1) {
+#   x <- unlist(lyriks_unnorm[i, ])
+#   data <- cbind(expr = x, metadata_lyriks)
+#   ax <- ggplot(data) +
+#     facet_wrap(~final_label, nrow = 1, scales = 'free_x') +
+#     geom_point(
+#       aes(y = expr, x = period, col = Run.DateTime, shape = Extraction.Date),
+#       position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.8)
+#     ) +
+#     # scale_colour_viridis_d(option = 'plasma') +
+#     theme(axis.text.x = element_text(angle = 45, hjust = 1))
+#   file <- sprintf('tmp/astral/fig/features/lyriks_unnorm-runtime-feat-%s.pdf', i)
+#   ggsave(file, ax, width = 12, height = 3.5)
+#   print(file)
+# }
+# 
+# for (i in feats1) {
+#   x <- unlist(lyriks_unnorm[i, ])
+#   data <- cbind(expr = x, metadata_lyriks)
+#   ax <- subset(data, expr > 0 & Extraction.Date != 'Not applicable') %>%
+#     ggplot() +
+#       geom_density(
+#         aes(x = expr, col = Extraction.Date, group = Extraction.Date)
+#       ) # +
+#       # scale_colour_viridis_d(option = 'plasma') +
+#       # theme(axis.text.x = element_text(angle = 45, hjust = 1))
+#   file <- sprintf('tmp/astral/fig/features/lyriks_unnorm-density-00-%s.pdf', i)
+#   ggsave(file, ax, width = 6, height = 3.5)
+#   print(file)
+# }
+# 
+# feature_avg <- apply(lyriks, 1, function(x) mean(x[x != 0]))
+# data <- data.frame(pct_zero = lyriks_feature_pct_zero, avg = feature_avg)
+# ax <- ggplot(data) +
+#   geom_point(aes(x = avg, y = pct_zero))
+# file <- 'tmp/astral/fig/feat-avg_pct_zero.pdf'
+# ggsave(file, ax, width = 8, height = 5)
+# 
+# # Plot: Missing values
+# lyriks_sample_pct_zero <- colSums(is.na(lyriks1)) / nrow(lyriks1)
+# sample_min <- apply(lyriks1, 2, min, na.rm = T)
+# sample_avg <- colMeans(lyriks1, na.rm = T) 
+# sample_sum <- colSums(lyriks1, na.rm = T) 
+# identical(names(sample_min), colnames(lyriks1))
+# 
+# sample_stats <- cbind(
+#   min = sample_min, 
+#   avg = sample_avg, 
+#   sum = sample_sum,
+#   pct_zero = lyriks_sample_pct_zero,
+#   metadata_lyriks[colnames(lyriks1), ]
+# )
+# 
+# # Averages still differ for unnormalised data
+# ax <- ggplot(sample_stats) +
+#   geom_point(
+#     aes(x = Extraction.Date, y = avg, col = Run.DateTime, shape = class.x),
+#     position = position_jitterdodge(jitter.width = 0.1, dodge.width = 1)
+#   ) +
+#   theme(axis.text.x = element_text(angle = 45, hjust = 1))
+# file <- 'tmp/astral/fig/sample_unnorm-avg.pdf'
+# ggsave(file, ax, width = 8, height = 5)
+# 
+# ax <- ggplot(sample_stats) +
+#   geom_point(
+#     aes(x = Extraction.Date, y = pct_zero, col = Run.DateTime, shape = Class),
+#     position = position_jitterdodge(jitter.width = 0.11, dodge.width = 0.8),
+#     cex = 1,
+#   ) +
+#   labs(
+#     x = 'Extraction date',
+#     y = 'Percentage missing',
+#     color = 'Run date',
+#   ) +
+#   theme(legend.key.size = unit(4, "mm")) +
+#   guides(color = guide_colorbar(barheight = unit(10, "mm")))
+# file <- 'tmp/astral/fig/sample-pct_na.pdf'
+# ggsave(file, ax, width = 3, height = 1.8)
+# 
+# ax <- ggplot(sample_stats) +
+#   geom_point(
+#     aes(x = pct_zero, y = avg, col = Extraction.Date),
+#     cex = 1,
+#   ) +
+#   labs(
+#     x = 'Percentage missing',
+#     y = 'Average expression',
+#     color = 'Extraction date',
+#   ) +
+#   theme(legend.key.size = unit(4, "mm"))
+# file <- 'tmp/astral/fig/avg-pct_na.pdf'
+# ggsave(file, ax, width = 3.2, height = 1.8)
+# 
+# # Plot: MNAR relationship
+# ext_date <- metadata_lyriks[colnames(lyriks1), 'Extraction.Date']
+# lyriks_batches <- split_cols(lyriks1, ext_date)
+# names(lyriks_batches)
+# 
+# compute_stats <- function(x) {
+#   data.frame(
+#     pct_na = rowSums(is.na(x)) / ncol(x),
+#     avg = rowMeans(x, na.rm = TRUE) 
+#   )
+# }
+# list_stats <- lapply(lyriks_batches, compute_stats)
+# list_stats1 <- lapply(names(list_stats), function(name) {
+#   list_stats[[name]]['date'] <- name
+#   return(list_stats[[name]])
+# })
+# mnar_stats <- do.call(rbind, list_stats1)
+# mnar_stats[is.na(mnar_stats)] <- 0
+# head(mnar_stats)
+# 
+# ax <- ggplot(mnar_stats) +
+#   geom_point(aes(x = avg, y = pct_na, color = date), cex = 1, shape = 1) +
+#   labs(
+#     x = 'Average expression',
+#     y = 'Percentage missing',
+#     color = 'Extraction date',
+#   ) +
+#   theme(legend.key.size = unit(4, "mm"))
+#   # guides(color = guide_colorbar(barheight = unit(15, "mm")))
+# file <- 'tmp/astral/fig/batches-avg_pct_na.pdf'
+# ggsave(file, ax, width = 3.2, height = 1.8)
 
 ##### Imputation #####
 
@@ -399,12 +398,15 @@ ggsave(file, ax, width = 3.2, height = 1.8)
 identical(rownames(metadata_lyriks), colnames(lyriks))
 idx <- subset(
   metadata_lyriks,
-  !(label %in% c('remit', 'relapse', 'qc'))
+  !(label %in% c('remit', 'relapse', 'QC'))
 ) %>%
   rownames()
 print(idx)
 slyriks <- lyriks[, idx]
 metadata_slyriks <- metadata_lyriks[idx, ]
+
+file <- 'data/astral/processed/metadata-lyriks.csv'
+write.csv(metadata_slyriks, file)
 
 # Impute in batch aware fashion
 # Only features with < 50% missing values in all batches
@@ -416,21 +418,24 @@ lyriks_batches <- split_cols(slyriks, ext_date)
 PCT_MISSING <- 0.5
 pct_na <- sapply(lyriks_batches, function(x) rowSums(is.na(x)) / ncol(x))
 to_impute <- apply(pct_na < PCT_MISSING, 1, all)
-idx <- names(to_impute)[to_impute]
-print(length(idx))
-flyriks <- slyriks[idx, ]
+prot_607 <- names(to_impute)[to_impute]
+flyriks <- slyriks[prot_607, ]
 flyriks_batches <- split_cols(flyriks, ext_date)
-sum(is.na(flyriks))
-prod(dim(flyriks))
+print(length(prot_607))
+rowSums(is.na(flyriks))
+dim(slyriks)
 
-flyriks1 <- flyriks
-flyriks1[is.na(flyriks1)] <- 0
-feat_nona <- rownames(flyriks)[rowSums(is.na(flyriks)) == 0]
-ax <- ggplot_pca(
-  flyriks1, metadata_lyriks,
-  col = 'age', shape = 'Extraction.Date'
-)
-file <- 'tmp/astral/fig/pca-flyriks-age.pdf'
+# flyriks_ft_pct_na <- rowSums(is.na(flyriks)) / ncol(flyriks)
+# ft_na30 <- names(flyriks_ft_pct_na)[flyriks_ft_pct_na > 0.3]
+# 
+# flyriks1 <- flyriks
+# flyriks1[is.na(flyriks1)] <- 0
+# feat_nona <- rownames(flyriks)[rowSums(is.na(flyriks)) == 0]
+# ax <- ggplot_pca(
+#   flyriks1, metadata_lyriks,
+#   col = 'age', shape = 'Extraction.Date'
+# )
+# file <- 'tmp/astral/fig/pca-flyriks-age.pdf'
 # ggsave(file, ax, width = 10, height = 6)
 
 # MVI: MinProb
@@ -445,9 +450,8 @@ iflyriks[1:20, 1:5]
 
 # MVI: kNN
 # TODO: Document exact details (kNN) 
-# TODO: Examine neighbours chosen? 
 knn_batches <- flyriks_batches %>%
-  lapply(function(x) impute.knn(data.matrix(x), k = 20)) %>%
+  lapply(function(x) impute.knn(data.matrix(x), k = 5)) %>%
   lapply(function(x) x$data)
 knn_lyriks <- do.call(cbind, knn_batches)
 sum(is.na(knn_lyriks))
@@ -460,6 +464,7 @@ ax <- ggplot_pca(
 file <- 'tmp/astral/fig/pca-knn.pdf'
 # ggsave(file, ax, width = 10, height = 6)
 
+### MVI: Evaluation ###
 
 # Features: Fully present
 lyriks_feature_pct_zero <- rowSums(is.na(slyriks)) / ncol(slyriks)
@@ -468,17 +473,16 @@ lyriks_sample_pct_zero <- colSums(is.na(slyriks)) / nrow(slyriks)
 f265lyriks <- slyriks[lyriks_feature_pct_zero == 0, ]
 f265lyriks_batches <- split_cols(f265lyriks, ext_date)
 
-# Simulate MAR (batch)
-x <- seq(8, 16, 0.01)
-plot(x, 1 - sigmoid(x, 3, -12))
-
-x <- seq(0, 1, 0.01)
-pdf <- dbeta(x, shape1 = 0.8, shape2 = 9)
-y <- rbeta(200, shape1 = 0.8, shape2 = 3)
-plot(x, pdf)
+# # Simulate MAR (batch)
+# x <- seq(8, 16, 0.01)
+# plot(x, 1 - sigmoid(x, 3, -12))
+# x <- seq(0, 1, 0.01)
+# pdf <- dbeta(x, shape1 = 0.8, shape2 = 9)
+# y <- rbeta(200, shape1 = 0.8, shape2 = 3)
+# plot(x, pdf)
 #  max(y)
 
-# Mixture of two missing holes
+# Mixture of two types of missing values 
 # 1. Sigmoid 2. Beta distribution
 dropout <- function(x, r, s, shape1, shape2) {
   feat_means <- rowMeans(x)
@@ -496,10 +500,10 @@ dropout <- function(x, r, s, shape1, shape2) {
 
 # Drop out 
 set.seed(0)
-mx1 <- dropout(f265lyriks_batches[[1]], r = 3, s = -11, shape1 = 0.8, shape2 = 4)
-mx2 <- dropout(f265lyriks_batches[[2]], r = 3, s = -11, shape1 = 0.8, shape2 = 4)
-mx3 <- dropout(f265lyriks_batches[[3]], r = 3, s = -12, shape1 = 0.8, shape2 = 4)
-mlyriks_batches <- list(mx1, mx2, mx3)
+mlyriks_batches <- lapply(
+  f265lyriks_batches, dropout,
+  r = 3, s = -11, shape1 = 0.8, shape2 = 4
+)
 pct_zero_batches <- mlyriks_batches %>%
   sapply(function(x) rowSums(is.na(x)) / ncol(x))
 idx <- rownames(f265lyriks)[rowSums(pct_zero_batches > 0.5) == 0]
@@ -508,41 +512,54 @@ f238lyriks_batches <- f265lyriks_batches %>%
   lapply(function(x) x[idx, ])
 mlyriks_batches1 <- mlyriks_batches %>%
   lapply(function(x) x[idx, ])
-
-pct_zero_batches1 <- mlyriks_batches1 %>%
-  sapply(function(x) rowSums(is.na(x)) / ncol(x))
 lapply(mlyriks_batches1, dim)
+
+# pct_zero_batches1 <- mlyriks_batches1 %>%
+#   sapply(function(x) rowSums(is.na(x)) / ncol(x))
+# str(mlyriks_batches1)
 
 # prod(dim(pct_zero_batches))
 
 # Evaluate MVI methods
-knn_batches <- mlyriks_batches1 %>%
-  lapply(function(x) impute.knn(data.matrix(x), k = 20)) %>%
+knn_batches3 <- mlyriks_batches1 %>%
+  lapply(function(x) impute.knn(data.matrix(x), k = 3)) %>%
   lapply(function(x) x$data)
-rmse_knn <- mapply(
+rmse_knn3 <- mapply(
   function(x, y) mean((data.matrix(x) - y) ^ 2) ^ 0.5,
   f238lyriks_batches, knn_batches
 )
 
-minprob_batches <- mlyriks_batches1 %>%
-  lapply(impute.MinProb, q = 0.1) %>%
-  lapply(data.matrix)
-rmse_minprob10 <- mapply(
+knn_batches5 <- mlyriks_batches1 %>%
+  lapply(function(x) impute.knn(data.matrix(x), k = 5)) %>%
+  lapply(function(x) x$data)
+rmse_knn5 <- mapply(
   function(x, y) mean((data.matrix(x) - y) ^ 2) ^ 0.5,
-  f238lyriks_batches, minprob_batches
+  f238lyriks_batches, knn_batches
 )
 
-minprob_batches <- mlyriks_batches1 %>%
-  lapply(impute.MinProb, q = 0.01) %>%
-  lapply(data.matrix)
-rmse_minprob01 <- mapply(
+knn_batches10 <- mlyriks_batches1 %>%
+  lapply(function(x) impute.knn(data.matrix(x), k = 10)) %>%
+  lapply(function(x) x$data)
+rmse_knn10 <- mapply(
   function(x, y) mean((data.matrix(x) - y) ^ 2) ^ 0.5,
-  f238lyriks_batches, minprob_batches
+  f238lyriks_batches, knn_batches
 )
 
-rmse_knn
-rmse_minprob10
-rmse_minprob01
+# minprob_batches <- mlyriks_batches1 %>%
+#   lapply(impute.MinProb, q = 0.1) %>%
+#   lapply(data.matrix)
+# rmse_minprob10 <- mapply(
+#   function(x, y) mean((data.matrix(x) - y) ^ 2) ^ 0.5,
+#   f238lyriks_batches, minprob_batches
+# )
+# 
+# minprob_batches <- mlyriks_batches1 %>%
+#   lapply(impute.MinProb, q = 0.01) %>%
+#   lapply(data.matrix)
+# rmse_minprob01 <- mapply(
+#   function(x, y) mean((data.matrix(x) - y) ^ 2) ^ 0.5,
+#   f238lyriks_batches, minprob_batches
+# )
 
 ##### Batch correction #####
 
@@ -552,12 +569,24 @@ table(metadata_slyriks$Extraction.Date, metadata_slyriks$label)
 # TODO: Decide on class factors to include: (period, class, sex)
 # TODO: How to handle the difference in period better (low priority)
 
-# TODO: Inspect high effect size features
+# ComBat - Modelling class covariate
+knn_lyriks <- knn_lyriks[, rownames(metadata_slyriks)]
+all(colnames(knn_lyriks) %in% rownames(metadata_slyriks))
+mod <- model.matrix(~label, data = metadata_slyriks)
+combat_lyriks <- ComBat(
+  knn_lyriks,
+  batch = metadata_slyriks$Extraction.Date, mod = mod,
+  par.prior = TRUE, ref.batch = '5/9/24'
+)
+knn_lyriks[1:20, 1:5]
+combat_lyriks[1:20, 1:5]
+
 # Class-specific ComBat
-identical(colnames(knn_lyriks), rownames(metadata_slyriks))
 label <- metadata_slyriks[colnames(knn_lyriks), 'label']
 knn_lyriks_labels <- split_cols(knn_lyriks, label)
-# str(knn_lyriks_labels[-2])
+str(knn_lyriks_labels[-2])
+
+# Do not correct cvt as they all come from the same batch
 combat_lyriks_labels <- lapply(knn_lyriks_labels[-2], function(x) {
   ComBat(
     x,
@@ -568,63 +597,64 @@ combat_lyriks_labels <- lapply(knn_lyriks_labels[-2], function(x) {
 combat_lyriks_labels1 <- c(combat_lyriks_labels, knn_lyriks_labels[2])
 cscombat_lyriks <- do.call(cbind, combat_lyriks_labels1)
 
+colnames(metadata_slyriks)
 ax <- ggplot_pca(
   cscombat_lyriks, metadata_slyriks,
-  color = 'label', shape = 'Extraction.Date'
+  color = 'label', shape = 'period'
 )
-file <- 'tmp/astral/fig/pca-cscombat.pdf'
-ggsave(file, ax, width = 10, height = 6)
+file <- 'tmp/astral/fig/pca-cscombat-class.pdf'
+ggsave(file, ax, width = 5, height = 4)
 
-# DE features between batches 
-metadata_slyriks1 <- metadata_slyriks[colnames(knn_lyriks), ]
-ctrl_5924 <- rownames(subset(
-  metadata_slyriks1,
-  final_label == 'ctrl' & Extraction.Date == '5/9/24'
-))
-ctrl_4924 <- rownames(subset(
-  metadata_slyriks1,
-  final_label == 'ctrl' & Extraction.Date == '4/9/24'
-))
-pvals <- calc_univariate(
-  t.test,
-  knn_lyriks[, ctrl_4924],
-  knn_lyriks[, ctrl_5924]
-)
-feat_top_p <- names(head(sort(pvals), 30))
-
-# TODO: Check plot features and plot PCA code!!!
-
-
-# ComBat - Modelling class covariate
-mod <- model.matrix(~label, data = metadata_slyriks)
-combat_lyriks <- ComBat(
-  knn_lyriks, batch = metadata_slyriks$Extraction.Date, mod = mod,
-  par.prior = TRUE, ref.batch = '5/9/24'
-)
-
-knn_lyriks[1:20, 1:10]
-combat_lyriks[1:20, 1:10]
+# # DE features between batches 
+# metadata_slyriks1 <- metadata_slyriks[colnames(knn_lyriks), ]
+# ctrl_5924 <- rownames(subset(
+#   metadata_slyriks1,
+#   final_label == 'ctrl' & Extraction.Date == '5/9/24'
+# ))
+# ctrl_4924 <- rownames(subset(
+#   metadata_slyriks1,
+#   final_label == 'ctrl' & Extraction.Date == '4/9/24'
+# ))
+# pvals <- calc_univariate(
+#   t.test,
+#   knn_lyriks[, ctrl_4924],
+#   knn_lyriks[, ctrl_5924]
+# )
+# feat_top_p <- names(head(sort(pvals), 30))
 
 ax <- ggplot_pca(
   combat_lyriks, metadata_slyriks,
-  color = 'final_label', shape = 'Extraction.Date'
+  color = 'Run.DateTime', shape = 'Extraction.Date'
 )
-file <- 'tmp/astral/fig/pca-combat_knn.pdf'
+file <- 'tmp/astral/fig/pca-combat_knn-batch.pdf'
 ggsave(file, ax, width = 10, height = 6)
 
 set.seed(0)
 feats <- sample(rownames(combat_lyriks), 40)
 
+##### Save data ##### 
 
-# Plot: Features
+dim(combat_lyriks)
+file <- 'data/astral/processed/combat_knn5_lyriks.csv'
+write.csv(combat_lyriks, file)
+
+##### Plot: Feature #####
 
 # Log-normalised data
-i <- 100
-idx <- rownames(lyriks1)[lyriks_feature_pct_zero == 0]
-prot <- idx[i]
+# i <- 100
+# idx <- rownames(lyriks1)[lyriks_feature_pct_zero == 0]
+# prot <- idx[i]
+prot <- ft_na30[8]
+print(prot) # P05362
+
+prot <- 'P04632'
+prot <- 'P05362'
+prot <- 'P08514'
 print(prot)
 
-x <- unlist(lyriks1[prot, ])
+x <- flyriks[prot, ] %>%
+  unlist() %>%
+  replace_na(0)
 metadata_sorted <- metadata_lyriks[names(x), ]
 data <- cbind(expr = x, metadata_sorted)
 ax <- ggplot(data) +
@@ -645,6 +675,27 @@ ax <- ggplot(data) +
 file <- sprintf('tmp/astral/fig/feature-%s.pdf', prot)
 ggsave(file, ax, width = 5, height = 1.8)
 
+# Batch corrected
+x <- unlist(combat_lyriks[prot, ])
+metadata_sorted <- metadata_lyriks[names(x), ]
+data <- cbind(expr = x, metadata_sorted)
+ax <- ggplot(data) +
+  facet_wrap(~Class, nrow = 1, scales = 'free_x') +
+  geom_point(
+    aes(y = expr, x = period, col = Run.DateTime, shape = Extraction.Date),
+    position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.8),
+    cex = 1
+  ) +
+  labs(
+    x = 'Period',
+    y = prot,
+    color = 'Run date',
+    shape = 'Extraction date',
+  ) +
+  theme(legend.key.size = unit(4, "mm")) +
+  guides(color = guide_colorbar(barheight = unit(15, "mm")))
+file <- sprintf('tmp/astral/fig/feature-knn-combat-%s.pdf', prot)
+ggsave(file, ax, width = 5, height = 1.8)
 
 set.seed(0)
 feats <- sample(rownames(knn_lyriks), 60)
