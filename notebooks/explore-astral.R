@@ -117,6 +117,7 @@ colnames(metadata_lyriks)
 metadata_lyriks$Polypeptide.Novogene.ID
 metadata_lyriks$final_label
 sum(metadata_lyriks$label == 'relapse')
+sum(metadata_lyriks$label == 'remit')
 metadata_lyriks$final_label[metadata_lyriks$label == 'relapse']
 
 # file <- 'data/astral/metadata/metadata-csa.csv'
