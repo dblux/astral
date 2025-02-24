@@ -3,6 +3,8 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
+import anndata as ad
+import scanpy as sc 
 
 from boruta import BorutaPy
 from dataclasses import dataclass, field
@@ -19,6 +21,7 @@ from sklearn.metrics import (
 )
 from statsmodels.formula.api import ols
 from statsmodels.stats.multitest import multipletests
+from venn import venn
 
 @dataclass
 class Result:
@@ -47,7 +50,9 @@ file = 'data/astral/processed/combat_knn5_lyriks.csv'
 lyriks = pd.read_csv(file, index_col=0, header=0).T
 file = 'data/astral/processed/metadata-lyriks.csv'
 md = pd.read_csv(file, index_col=0, header=0)
-list(md)
+md.columns
+lyriks.shape
+
 
 # Model 1A: cvt (M0) v.s. non-cvt (M0)
 # Prognostic markers
@@ -76,6 +81,34 @@ lyriks_1c = lyriks.loc[y.index]
 X = lyriks_1c
 print(y.value_counts()) # imbalanced
 
+##### Feature selection #####
+# Mongan et al.
+filename = 'data/astral/etc/mongan-etable5.csv'
+mongan = pd.read_csv(filename, index_col=0)
+mongan_prots = mongan.index[mongan.q < 0.05]
+in_astral = mongan_prots.isin(lyriks.columns)
+missing_astral = mongan_prots[~in_astral]
+mongan_prot_idx = lyriks.columns.get_indexer(mongan_prots[in_astral])
+
+# Feature selection: Direction-agnostic changes in psychotic (M0, M24)
+cvt_pids = set([
+    md.loc[sid, 'sn'] for sid in lyriks.index
+    if md.loc[sid, 'final_label'] == 'cvt'
+])
+### Pairs: (0, 24)
+cvt_pairs = [
+    (sid + '_0', sid + '_24') for sid in sorted(list(cvt_pids))
+    if sid + '_0' in lyriks.index and sid + '_24' in lyriks.index
+]
+cvt1, cvt2 = zip(*cvt_pairs)
+cvt1, cvt2 = list(cvt1), list(cvt2) 
+M0 = lyriks.loc[cvt1, ]
+M24 = lyriks.loc[cvt2, ]
+absdelta = abs(M24 - M0.values)
+feat_meanabs = absdelta.mean()
+# Top 30 features
+psychotic_abs_prots = feat_meanabs.nlargest(30).index
+
 # Feature selection (boruta)
 rf = RandomForestClassifier(n_jobs=-1, class_weight='balanced', max_depth=5)
 
@@ -88,8 +121,8 @@ cross_validators = {
 # Run detail
 result = Result({
     'version': '1a',
-    'selector': 'prognostic_ancova',
-    'model': 'logreg',
+    'selector': 'psychotic_ttest',
+    'model': 'elasticnet',
     'validator': 'kfold',
     'snapshot': {}, 
 })
@@ -109,30 +142,30 @@ for i, (train_idx, test_idx) in enumerate(cross_validator.split(X, y)):
                 md.loc[sid, 'sn'] for sid in X.index[train_idx]
                 if md.loc[sid, 'final_label'] == 'cvt'
             ]
-            # ### Pairs: (0, 24)
-            # cvt_pairs = [
-            #     (sid + '_0', sid + '_24') for sid in cvt_pids
-            #     if sid + '_24' in lyriks.index
+            ### Pairs: (0, 24)
+            cvt_pairs = [
+                (sid + '_0', sid + '_24') for sid in cvt_pids
+                if sid + '_24' in lyriks.index
+            ]
+            cvt1, cvt2 = zip(*cvt_pairs)
+            cvt1, cvt2 = list(cvt1), list(cvt2) 
+            # ### Pairs: (FEP-1, 24)
+            # cvt_pid_fil = [
+            #     pid for pid in cvt_pids
+            #     if pid + '_24' in lyriks.index
             # ]
-            # cvt1, cvt2 = zip(*cvt_pairs)
-            # cvt1, cvt2 = list(cvt1), list(cvt2) 
-            ### Pairs: (FEP-1, 24)
-            cvt_pid_fil = [
-                pid for pid in cvt_pids
-                if pid + '_24' in lyriks.index
-            ]
-            cvt_samples = md.loc[
-                md.sn.isin(cvt_pid_fil),
-                ['sn', 'period', 'final_label']
-            ]
-            cvt_pairs = (
-                cvt_samples
-                .sort_values(by='period')
-                .groupby('sn').tail(2)
-                .sort_values(by='sn')
-            )
-            cvt1 = cvt_pairs.index[cvt_pairs.period != 24]
-            cvt2 = cvt_pairs.index[cvt_pairs.period == 24]
+            # cvt_samples = md.loc[
+            #     md.sn.isin(cvt_pid_fil),
+            #     ['sn', 'period', 'final_label']
+            # ]
+            # cvt_pairs = (
+            #     cvt_samples
+            #     .sort_values(by='period')
+            #     .groupby('sn').tail(2)
+            #     .sort_values(by='sn')
+            # )
+            # cvt1 = cvt_pairs.index[cvt_pairs.period != 24]
+            # cvt2 = cvt_pairs.index[cvt_pairs.period == 24]
             # Paired t-test
             pvalues = [
                 ttest_rel(
@@ -163,7 +196,10 @@ for i, (train_idx, test_idx) in enumerate(cross_validator.split(X, y)):
             # ANCOVA
             pvalues = []
             for prot in data_train.columns[:-3]:
-                model = ols(f'{prot} ~ final_label + age + gender', data=data_train).fit()
+                model = ols(
+                    f'{prot} ~ final_label + age + gender',
+                    data=data_train
+                ).fit()
                 pvalues.append(model.pvalues['final_label'])
                 # table = sm.stats.anova_lm(model, typ=2)
             result.pvals.append(pvalues)
@@ -195,6 +231,10 @@ for i, (train_idx, test_idx) in enumerate(cross_validator.split(X, y)):
             result.ranks.append(selector.ranking_)
             print(f'No. of features selected = {selector.n_features_}')
             X_test_f = selector.transform(X_test)
+        case {'selector': 'mongan'}:
+            X_train_f = X_train[:, mongan_prot_idx]
+            X_test_f = X_test[:, mongan_prot_idx]
+            print(f'No. of features selected = {X_train_f.shape[1]}')
     match result.metadata:
         case {'model': 'elasticnet'}:
             model = LogisticRegression(
@@ -237,10 +277,14 @@ result.metadata['snapshot'].update({
 })
 print(result.metadata)
 
+
 # TODO: Loop over models
 # TODO: ANCOVA feat sel (age, sex as covariates)
 
 ##### Feature selection ##### 
+
+# Mongan et al.
+result.features = mongan_prot
 
 # BH correction
 qvals = np.array([
@@ -262,11 +306,11 @@ len(result.features)
 # np.unique(np.sum(pvals < 0.05, axis=0), return_counts=True) 
 
 # Check saved run 
-pvals = np.array(result1.pvals)
+pvals = np.array(result_prognostic_ancova.pvals)
 avg_p = pd.DataFrame({'p': pvals.mean(axis=0)}, index=X.columns)
 p_fil = avg_p[avg_p.p < 0.05]
-result.features = p_fil.index.tolist()
-len(result.features)
+prots = p_fil.index
+len(prots)
 np.unique(np.sum(pvals < 0.05, axis=0), return_counts=True) 
 
 # Boruta
@@ -288,22 +332,22 @@ filename = (
 )
 filepath = 'tmp/astral/' + filename + '.pkl'
 print(filepath)
+
 with open(filepath, 'wb') as file:
     pickle.dump(result, file)
 
 # Load
-filepath = 'tmp/astral/1a-psychotic_ttest-logreg-kfold.pkl'
+filepath = 'tmp/astral/1a-psychotic_ttest-elasticnet-kfold.pkl'
 with open(filepath, 'rb') as file:
     result_psychotic = pickle.load(file)
 
-filepath = 'tmp/astral/1a-psychotic_ttest_fepm1-logreg-kfold.pkl'
+filepath = 'tmp/astral/1a-prognostic_ancova-elasticnet-kfold.pkl'
 with open(filepath, 'rb') as file:
-    result_psychotic1 = pickle.load(file)
+    result_prognostic_ancova = pickle.load(file)
 
-
-filepath = 'tmp/astral/1a-prognostic_ancova-logreg-kfold.pkl'
+filepath = 'tmp/astral/1a-boruta-elasticnet-kfold.pkl'
 with open(filepath, 'rb') as file:
-    result1 = pickle.load(file)
+    result_boruta = pickle.load(file)
 
 len(result1.features)
 
@@ -343,8 +387,197 @@ plt.savefig(filepath)
 
 ###### PCA #####
 
-# Perform PCA
-pca = PCA(n_components=3)
+def plot_scanpy(
+    adata, colour=None, shape=None, size=None
+):
+    assert 'X_pca' in adata.obsm
+    X_pca = adata.obsm['X_pca']
+    # TODO: % var
+    column_idx = [f'PC{i + 1}' for i in range(X_pca.shape[1])]
+    data = pd.DataFrame(X_pca, index=adata.obs_names, columns=column_idx)
+    if colour:
+        data[colour] = adata.obs[colour]
+    if shape:
+        data[shape] = adata.obs[shape]
+    plt.figure()
+    sns.scatterplot(
+        data=data,
+        x='PC1', y = 'PC2',
+        hue=colour, style=shape,
+        markers=['o', 's', '^', 'X'],
+        edgecolor='none',
+    )
+    plt.show()
+
+
+# Subset
+md.period = md.period.astype(str)
+data = ad.AnnData(lyriks, md)
+cvt = data[data.obs.final_label == 'cvt',:]
+
+data_mongan = data[:, mongan_prots[in_astral]]
+uhr_mongan = data[data.obs.final_label != 'ctrl', mongan_prots[in_astral]]
+
+data_progq = data[:, result_prognostic_ancova.features]
+uhr_progq = data[data.obs.final_label != 'ctrl', result_prognostic_ancova.features]
+
+uhr_psych = data[data.obs.final_label != 'ctrl', result_psychotic.features]
+cvt_psych = data[data.obs.final_label == 'cvt', result_psychotic.features]
+
+uhr_psych_abs = data[data.obs.final_label != 'ctrl', psychotic_abs_prots]
+cvt_psych_abs = data[data.obs.final_label == 'cvt', psychotic_abs_prots]
+
+# Features: All
+sc.pp.pca(data)
+sc.pl.pca(
+    data,
+    # data[data.obs.final_label == 'cvt', :],
+    color=['final_label', 'period'],
+    size=100,
+)
+
+sc.pp.pca(cvt)
+
+# Features: Mongan
+sc.pp.pca(data_mongan)
+data_mongan.obs_names
+
+plot_scanpy(data_mongan, colour='period', shape='final_label')
+d.period.value_counts()
+d.head()
+
+fig = sc.pl.pca(
+    data_mongan,
+    # uhr_mongan[uhr_mongan.obs.final_label == 'cvt'],
+    color=['final_label', 'period'],
+    size=300,
+    return_fig=True,
+)
+filename = 'tmp/astral/fig/pca-mongan-all.pdf'
+fig.savefig(filename)
+
+# Features: Prognostic 
+sc.pp.pca(uhr_progq)
+
+fig = sc.pl.pca(
+    # uhr_progq,
+    uhr_progq[uhr_progq.obs.final_label == 'cvt'],
+    color=['final_label', 'period'],
+    size=300,
+    return_fig=True,
+)
+filename = 'tmp/astral/fig/pca-progq-cvt.pdf'
+fig.savefig(filename)
+
+# Features: Psychotic
+sc.pp.pca(uhr_psych_abs)
+fig = sc.pl.pca(
+    uhr_psych_abs[uhr_psych_abs.obs.final_label == 'cvt'],
+    color=['sn', 'period'],
+    size=300,
+    return_fig=True,
+)
+filename = 'tmp/astral/fig/pca-psychabs-cvtsub.pdf'
+fig.savefig(filename)
+
+sc.pp.pca(cvt_psych)
+fig = sc.pl.pca(
+    cvt_psych,
+    # uhr_psych[uhr_psych.obs.final_label == 'cvt'],
+    color=['sn', 'period'],
+    size=300,
+    return_fig=True,
+)
+filename = 'tmp/astral/fig/pca-psych-cvt.pdf'
+fig.savefig(filename)
+
+# Features: Psychotic (abs)
+sc.pp.pca(uhr_psych_abs)
+
+fig = sc.pl.pca(
+    # uhr_psych_abs,
+    uhr_psych_abs[uhr_psych_abs.obs.final_label == 'cvt'],
+    color=['sn', 'period'],
+    size=300,
+    return_fig=True,
+)
+filename = 'tmp/astral/fig/pca-psych_abs-cvtsub.pdf'
+fig.savefig(filename)
+
+sc.pp.pca(cvt_psych_abs)
+
+fig = sc.pl.pca(
+    cvt_psych_abs,
+    color=['sn', 'period'],
+    size=300,
+    return_fig=True,
+)
+filename = 'tmp/astral/fig/pca-psych_abs-cvt.pdf'
+fig.savefig(filename)
+
+def plot_arrows(
+    adata, colour=None, shape=None, size=None
+):
+    if 'X_pca' not in adata.obsm:
+        raise ValueError('PCA not performed on AnnData yet!')
+    adata.obs.period = adata.obs.period.astype(int)
+    X_pca = adata.obsm['X_pca']
+    # TODO: % var
+    column_idx = [f'PC{i + 1}' for i in range(X_pca.shape[1])]
+    data = pd.DataFrame(X_pca, index=adata.obs_names, columns=column_idx)
+    data['period'] = adata.obs['period']
+    data['sn'] = adata.obs['sn']
+    if colour:
+        data[colour] = adata.obs[colour]
+    if shape:
+        data[shape] = adata.obs[shape]
+    patients = data['sn'].unique()
+    get_colour = plt.colormaps['rainbow']
+    n = len(patients)
+    col_idx = np.linspace(0, 1, n)
+    fig, ax = plt.subplots()
+    for i, patient in zip(col_idx, patients):
+        # Subset patient data and sort by time
+        patient_data = data[data['sn'] == patient].sort_values(by='period')
+        print(patient_data)
+        x = patient_data['PC1'].values
+        y = patient_data['PC2'].values
+        ax.scatter(
+            x, y, color=get_colour(i), label=patient, alpha=0.6)
+        for j in range(len(x) - 1):
+            ax.arrow(
+                x[j], y[j],
+                x[j + 1] - x[j], y[j + 1] - y[j],
+                color=get_colour(i), alpha=1, head_width=0.3,
+                length_includes_head=True
+            )
+    ax.set_xlabel('PC1')
+    ax.set_ylabel('PC2')
+    ax.legend()
+    return fig
+
+fig = plot_arrows(cvt_psych_abs)
+fig.set_size_inches(10, 6)
+filename = 'tmp/astral/fig/traj-psych_abs-cvt.pdf'
+fig.savefig(filename)
+
+fig = plot_arrows(cvt)
+fig.set_size_inches(10, 6)
+filename = 'tmp/astral/fig/traj-all-cvt.pdf'
+fig.savefig(filename)
+
+cvt_multiple_pids = ['L0325S', 'L0476S', 'L0544S', 'L0561S', 'L0609S', 'L0646S']
+sc.pp.pca(cvt)
+fig = sc.pl.pca(
+    cvt[~cvt.obs.sn.isin(cvt_multiple_pids)],
+    color=['sn', 'period'],
+    # dimensions=[(0,1), (0,2)],
+    # groups=['L0325S', 'L0609S'],
+    projection='2d', size=100,
+    return_fig=True,
+)
+filename = 'tmp/astral/fig/pca-cvt_timepoint1.pdf'
+fig.savefig(filename)
 
 print(X.shape)
 X_pca = pd.DataFrame(
@@ -408,48 +641,39 @@ sns.scatterplot(data=X_y, x='PC1', y='PC3', hue='final_label', ax=ax2)
 filepath = 'tmp/astral/fig/pca-1a-59x33.pdf'
 plt.savefig(filepath)
 
-##### Comparison #####
+##### Venn #####
 
-def plot_venn2(a, b, set_labels):
-    a = set(a)
-    b = set(b)
-    venn2(
-        subsets=(len(a - b), len(b - a), len(a.intersection(b))),
-        set_labels=set_labels
-    )
+# Mongan
 
-def plot_venn3(a, b, c, set_labels=None):
-    a = set(a)
-    b = set(b)
-    c = set(c)
-    n_a = len(a - b - c)
-    n_b = len(b - a - c)
-    n_c = len(c - b - a)
-    n_ab = len(a & b - c) 
-    n_ac = len(a & c - b)
-    n_bc = len(b & c - a)
-    n_abc = len(a & b & c)
-    venn3(
-        subsets=(n_a, n_b, n_ab, n_c, n_ac, n_bc, n_abc),
-        set_labels=set_labels
-    )
+filepath = 'data/astral/etc/mongan-etable5.csv'
+mongan = pd.read_csv(filepath, index_col=0, header=0)
+mongan_prots = mongan.index[mongan.q < 0.05]
 
-plot_venn2(
-    result.features,
-    result_prognostic.features,
-    ('Prognostic (ANCOVA)', 'Prognostic (t-test)')
-)
-filepath = 'tmp/astral/fig/venn-prog-ancova_ttest.pdf'
-plt.savefig(filepath)
+# TODO 
+# Check missing proteins with original data
+# They cannot be detected by astral?
+# Any prognostic that was not detected by Mongan?
 
-plot_venn3(
-    result_psychotic.features,
-    result_psychotic1.features,
-    result_prognostic.features,
-    ('Psychotic (M0, M24)','Psychotic (FEP -1)' 'Prognostic')
-)
-filepath = 'tmp/astral/fig/venn-psych0_psych1_prog.pdf'
-plt.savefig(filepath)
+
+result_prognostic_ancova.pvals
+
+# No BH correction
+pvals = np.array(result_prognostic_ancova.pvals)
+avg_p = pd.DataFrame({'p': pvals.mean(axis=0)}, index=lyriks.columns)
+p_fil = avg_p[avg_p.p < 0.05]
+prots_progp = p_fil.index.tolist()
+len(prots_progp)
+
+features_1a = {
+    'Mongan et al.': set(mongan_prots),
+    'Prognostic (ANCOVA; p < 0.05)': set(prots_progp),
+    'Psychotic (M0, M24)': set(result_psychotic.features),
+    'Boruta': set(result_boruta.features),
+}
+venn(features_1a)
+filename = 'tmp/astral/fig/venn4-feats-mongan_progp_psychotic_boruta.pdf'
+plt.savefig(filename)
+
 
 # TODO: Plot ROC boruta again
 # TODO: SVM (other models)
@@ -460,29 +684,3 @@ param_grid = {
     'kernel': ['linear', 'rbf'],
     'gamma': ['scale', 'auto']
 }
-
-# Mongan
-
-filepath = 'data/astral/etc/mongan-etable5.csv'
-mongan = pd.read_csv(filepath, index_col=0, header=0)
-mongan_prots = set(mongan.index[mongan.q < 0.05])
-features_ttest = set(result_ttest.features)
-features_boruta = set(result_boruta.features)
-
-n1 = len(mongan_prots - features_ttest - features_boruta)
-n2 = len(features_ttest - mongan_prots - features_boruta)
-n3 = len(features_boruta - mongan_prots - features_ttest)
-n12 = len(mongan_prots & features_ttest - features_boruta) 
-n13 = len(mongan_prots & features_boruta - features_ttest)
-n23 = len(features_ttest & features_boruta - mongan_prots)
-n123 = len(mongan_prots & features_ttest & features_boruta)
-
-plt.figure()
-venn3(
-    subsets=(n1, n2, n12, n3, n13, n23, n123),
-    set_labels=('mongan', 'ttest', 'boruta')
-)
-filepath = 'tmp/astral/fig/venn-mongan_ttest_boruta.pdf'
-plt.savefig(filepath)
-
-
