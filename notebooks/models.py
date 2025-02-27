@@ -50,9 +50,12 @@ file = 'data/astral/processed/combat_knn5_lyriks.csv'
 lyriks = pd.read_csv(file, index_col=0, header=0).T
 file = 'data/astral/processed/metadata-lyriks.csv'
 md = pd.read_csv(file, index_col=0, header=0)
-md.columns
-lyriks.shape
 
+filepath = 'data/astral/raw/report.pg_matrix.tsv'
+raw = pd.read_csv(filepath, sep='\t', index_col=0, header=0)
+
+filename = 'data/astral/raw/reprocessed-all.csv'
+reprocessed = pd.read_csv(filename, index_col=0, header=0)
 
 # Model 1A: cvt (M0) v.s. non-cvt (M0)
 # Prognostic markers
@@ -61,6 +64,7 @@ md_1a = md[(md.final_label != 'ctrl') & (md.period == 0)]
 y = md_1a.final_label.replace({'rmt': 0, 'mnt': 0, 'cvt': 1})
 lyriks_1a = lyriks.loc[y.index]
 X = lyriks_1a
+X.shape
 print(y.value_counts()) # imbalanced
 
 # Model 1B: cvt (M0) v.s. maintain (M0)
@@ -74,21 +78,83 @@ X = lyriks_1b
 print(y.value_counts()) # imbalanced
 
 # Model 1C: cvt (M0) v.s. remit (M0)
-# Model 2: maintain (M0) v.s. early remit (M0)
 md_1c = md[(md.final_label.isin(['cvt', 'rmt'])) & (md.period == 0)]
 y = md_1c.final_label.replace({'rmt': 0, 'cvt': 1})
 lyriks_1c = lyriks.loc[y.index]
 X = lyriks_1c
 print(y.value_counts()) # imbalanced
 
+# Model 2A: maintain (M0) v.s. remit (M0)
+md_2a = md[(md.final_label.isin(['mnt', 'rmt'])) & (md.period == 0)]
+y = md_2a.final_label.replace({'mnt': 0, 'rmt': 1})
+lyriks_2a = lyriks.loc[y.index]
+X = lyriks_2a
+print(y.value_counts()) # imbalanced
+
+# Model 2B: maintain (M0) v.s. early remit (M0)
+md_2b = md[(md.label.isin(['maintain', 'early_remit'])) & (md.period == 0)]
+y = md_2b.final_label.replace({'mnt': 0, 'rmt': 1})
+lyriks_2b = lyriks.loc[y.index]
+X = lyriks_2b
+print(y.value_counts()) # imbalanced
+# Late remit patients: 9
+
+##### Biomarkers #####
+# UHR biomarkers: control (M0/12/24) v.s. maintain (M0)
+# mnt patients are most likely medicated after M0 
+md_3 = md[(md.final_label.isin(['ctrl', 'mnt'])) & (md.period == 0)]
+y = md_3.final_label.replace({'ctrl': 0, 'mnt': 1})
+lyriks_3 = lyriks.loc[y.index]
+# Prepare dataframe
+lyriks_3.columns = lyriks_3.columns.str.replace(';', '')
+lyriks_3['final_label'] = md.loc[lyriks_3.index, 'final_label']
+lyriks_3['age'] = md.loc[lyriks_3.index, 'age']
+lyriks_3['gender'] = md.loc[lyriks_3.index, 'gender']
+print(y.value_counts()) # imbalanced
+
+pvalues = []
+for prot in lyriks_3.columns[:-3]:
+    model = ols(
+        f'{prot} ~ final_label + age + gender',
+        data=lyriks_3
+    ).fit()
+    print(model.pvalues.index[1])
+    pvalues.append(model.pvalues[1])
+    # table = sm.stats.anova_lm(model, typ=2)
+
+_, qvalues, _, _ = multipletests(pvalues, alpha=0.05, method='fdr_bh')
+stats = pd.DataFrame(
+    {'p': pvalues, 'q': qvalues},
+    index=lyriks.columns
+)
+prots_p = stats.index[stats.p < 0.05] # p-value
+prots_q = stats.index[stats.q < 0.05] # q-value
+
+filename = 'tmp/astral/uhr_3a-ancova.csv'
+stats.to_csv(filename)
+
+filename = 'tmp/astral/uhr_3a-ancova.csv'
+uhr_biomarkers = pd.read_csv(filename, index_col=0, header=0)
+
+# TODO: Investigate medication effects
+# maintain (M0) v.s. maintain (M12/24)
+
 ##### Feature selection #####
 # Mongan et al.
+# P02489 is not in reprocessed data, P43320 is in reprocessed data
 filename = 'data/astral/etc/mongan-etable5.csv'
 mongan = pd.read_csv(filename, index_col=0)
 mongan_prots = mongan.index[mongan.q < 0.05]
 in_astral = mongan_prots.isin(lyriks.columns)
 missing_astral = mongan_prots[~in_astral]
-mongan_prot_idx = lyriks.columns.get_indexer(mongan_prots[in_astral])
+mongan_prots_astral = mongan_prots[in_astral]
+mongan_prot_idx = lyriks.columns.get_indexer(mongan_prots_astral)
+len(mongan_prots)
+len(mongan_prots_astral)
+set(mongan_prots) - set(mongan_prots_astral)
+# mongan_prots[~mongan_prots.isin(reprocessed.index)]
+# sum(reprocessed.index == 'P43320')
+# reprocessed.loc['P43320', :]
 
 # Feature selection: Direction-agnostic changes in psychotic (M0, M24)
 cvt_pids = set([
@@ -121,9 +187,9 @@ cross_validators = {
 # Run detail
 result = Result({
     'version': '1a',
-    'selector': 'psychotic_ttest',
+    'selector': 'prognostic_ancova',
     'model': 'elasticnet',
-    'validator': 'kfold',
+    'validator': 'loocv',
     'snapshot': {}, 
 })
 cross_validator = cross_validators[result.metadata['validator']]
@@ -175,14 +241,16 @@ for i, (train_idx, test_idx) in enumerate(cross_validator.split(X, y)):
                 for prot in list(X)
             ]
             result.pvals.append(pvalues)
-            _, qvalues, _, _ = multipletests(pvalues, alpha=0.05, method='fdr_bh')
+            _, qvalues, _, _ = multipletests(
+                pvalues, alpha=0.05, method='fdr_bh'
+            )
             statvalues = pd.DataFrame(
                 {'p': pvalues, 'q': qvalues},
                 index=list(X)
             )
-            prots_p = statvalues.index[statvalues.p < 0.05]
-            # prots_q = statvalues.index[statvalues.q < 0.05]
-            idx = X.columns.get_indexer(prots_p)
+            prots = statvalues.index[statvalues.p < 0.05]
+            # prots = statvalues.index[statvalues.q < 0.05]
+            idx = X.columns.get_indexer(prots)
             X_train_f = X_train[:, idx]
             X_test_f = X_test[:, idx]
             print(f'No. of features selected = {X_train_f.shape[1]}')
@@ -284,7 +352,8 @@ print(result.metadata)
 ##### Feature selection ##### 
 
 # Mongan et al.
-result.features = mongan_prot
+result.features = mongan_prots_astral
+len(result.features)
 
 # BH correction
 qvals = np.array([
@@ -294,8 +363,8 @@ qvals = np.array([
 # Assumption: Order of columns is preserved
 avg_q = pd.DataFrame({'q': qvals.mean(axis=0)}, index=list(X))
 q_fil = avg_q[avg_q.q < 0.05]
-print(q_fil.shape[0])
 result.features = q_fil.index.tolist()
+len(result.features)
 
 # No BH correction
 pvals = np.array(result.pvals)
@@ -318,38 +387,45 @@ ranks = np.array(result.ranks)
 avg_rank = pd.DataFrame({'Rank': ranks.mean(axis=0)}, index=list(X))
 # Assumption: Order of columns is preserved
 rank_fil = avg_rank[avg_rank.Rank <= 2]
-print(rank_fil.shape)
 result.features = rank_fil.index.tolist()
+len(result.features)
 
 ##### Save results #####
 
 # Save
-filename = (
+name = (
     f'{result.metadata["version"]}-'
     f'{result.metadata["selector"]}-'
     f'{result.metadata["model"]}-'
     f'{result.metadata["validator"]}'
 )
-filepath = 'tmp/astral/' + filename + '.pkl'
-print(filepath)
-
-with open(filepath, 'wb') as file:
+filename = 'tmp/astral/' + name + '.pkl'
+print(filename)
+with open(filename, 'wb') as file:
     pickle.dump(result, file)
 
 # Load
-filepath = 'tmp/astral/1a-psychotic_ttest-elasticnet-kfold.pkl'
-with open(filepath, 'rb') as file:
+filename = 'tmp/astral/1a-mongan-elasticnet-kfold.pkl'
+with open(filename, 'rb') as file:
+    result_mongan = pickle.load(file)
+
+filename = 'tmp/astral/1a-psychotic_ttest-elasticnet-kfold.pkl'
+with open(filename, 'rb') as file:
     result_psychotic = pickle.load(file)
 
-filepath = 'tmp/astral/1a-prognostic_ancova-elasticnet-kfold.pkl'
-with open(filepath, 'rb') as file:
+filename = 'tmp/astral/1a-prognostic_ancova-elasticnet-kfold.pkl'
+with open(filename, 'rb') as file:
     result_prognostic_ancova = pickle.load(file)
 
-filepath = 'tmp/astral/1a-boruta-elasticnet-kfold.pkl'
-with open(filepath, 'rb') as file:
+filename = 'tmp/astral/1a-boruta-elasticnet-kfold.pkl'
+with open(filename, 'rb') as file:
     result_boruta = pickle.load(file)
 
-len(result1.features)
+filename = 'tmp/astral/2b-prognostic_ancova-elasticnet-kfold.pkl'
+with open(filename, 'rb') as file:
+    result_remission = pickle.load(file)
+
+len(result_boruta.features)
 
 ##### Evaluation ##### 
 
@@ -381,34 +457,51 @@ plt.xlabel('False Positive Rate (FPR)')
 plt.ylabel('True Positive Rate (TPR)')
 plt.title('ROC curve')
 plt.legend()
-filepath = 'tmp/astral/fig/roc-' + filename + '.pdf'
+filepath = 'tmp/astral/fig/roc-' + name + '.pdf'
 print(filepath)
 plt.savefig(filepath)
 
 ###### PCA #####
 
-def plot_scanpy(
-    adata, colour=None, shape=None, size=None
+def plot_arrows(
+    adata, colour=None, shape=None, size=None, head_width=0.05
 ):
-    assert 'X_pca' in adata.obsm
+    if 'X_pca' not in adata.obsm:
+        raise ValueError('PCA not performed on AnnData yet!')
+    adata.obs.period = adata.obs.period.astype(int)
     X_pca = adata.obsm['X_pca']
     # TODO: % var
     column_idx = [f'PC{i + 1}' for i in range(X_pca.shape[1])]
     data = pd.DataFrame(X_pca, index=adata.obs_names, columns=column_idx)
+    data['period'] = adata.obs['period']
+    data['sn'] = adata.obs['sn']
     if colour:
         data[colour] = adata.obs[colour]
     if shape:
         data[shape] = adata.obs[shape]
-    plt.figure()
-    sns.scatterplot(
-        data=data,
-        x='PC1', y = 'PC2',
-        hue=colour, style=shape,
-        markers=['o', 's', '^', 'X'],
-        edgecolor='none',
-    )
-    plt.show()
-
+    patients = data['sn'].unique()
+    get_colour = plt.colormaps['rainbow']
+    n = len(patients)
+    col_idx = np.linspace(0, 1, n)
+    fig, ax = plt.subplots()
+    for i, patient in zip(col_idx, patients):
+        # Subset patient data and sort by time
+        patient_data = data[data['sn'] == patient].sort_values(by='period')
+        x = patient_data['PC1'].values
+        y = patient_data['PC2'].values
+        ax.scatter(
+            x, y, color=get_colour(i), label=patient, alpha=0.6)
+        for j in range(len(x) - 1):
+            ax.arrow(
+                x[j], y[j],
+                x[j + 1] - x[j], y[j + 1] - y[j],
+                color=get_colour(i), alpha=1, head_width=head_width,
+                length_includes_head=True
+            )
+    ax.set_xlabel('PC1')
+    ax.set_ylabel('PC2')
+    ax.legend()
+    return fig
 
 # Subset
 md.period = md.period.astype(str)
@@ -416,7 +509,8 @@ data = ad.AnnData(lyriks, md)
 cvt = data[data.obs.final_label == 'cvt',:]
 
 data_mongan = data[:, mongan_prots[in_astral]]
-uhr_mongan = data[data.obs.final_label != 'ctrl', mongan_prots[in_astral]]
+uhr_mongan = data[data.obs.final_label != 'ctrl', mongan_prots_astral]
+cvt_mongan = data[data.obs.final_label == 'cvt', mongan_prots_astral]
 
 data_progq = data[:, result_prognostic_ancova.features]
 uhr_progq = data[data.obs.final_label != 'ctrl', result_prognostic_ancova.features]
@@ -439,12 +533,12 @@ sc.pl.pca(
 sc.pp.pca(cvt)
 
 # Features: Mongan
-sc.pp.pca(data_mongan)
-data_mongan.obs_names
+sc.pp.pca(cvt_mongan)
 
-plot_scanpy(data_mongan, colour='period', shape='final_label')
-d.period.value_counts()
-d.head()
+fig = plot_arrows(cvt_mongan, head_width=0.05)
+fig.set_size_inches(10, 6)
+filename = 'tmp/astral/fig/traj-mongan-cvt.pdf'
+fig.savefig(filename)
 
 fig = sc.pl.pca(
     data_mongan,
@@ -470,14 +564,17 @@ filename = 'tmp/astral/fig/pca-progq-cvt.pdf'
 fig.savefig(filename)
 
 # Features: Psychotic
-sc.pp.pca(uhr_psych_abs)
+sc.pp.pca(uhr_psych)
+uhr_psych.shape
+
 fig = sc.pl.pca(
-    uhr_psych_abs[uhr_psych_abs.obs.final_label == 'cvt'],
-    color=['sn', 'period'],
+    uhr_psych,
+    # uhr_psych[uhr_psych.obs.final_label == 'cvt'],
+    color=['final_label', 'period'],
     size=300,
     return_fig=True,
 )
-filename = 'tmp/astral/fig/pca-psychabs-cvtsub.pdf'
+filename = 'tmp/astral/fig/pca-psych-uhr.pdf'
 fig.savefig(filename)
 
 sc.pp.pca(cvt_psych)
@@ -504,7 +601,6 @@ fig = sc.pl.pca(
 filename = 'tmp/astral/fig/pca-psych_abs-cvtsub.pdf'
 fig.savefig(filename)
 
-sc.pp.pca(cvt_psych_abs)
 
 fig = sc.pl.pca(
     cvt_psych_abs,
@@ -515,55 +611,16 @@ fig = sc.pl.pca(
 filename = 'tmp/astral/fig/pca-psych_abs-cvt.pdf'
 fig.savefig(filename)
 
-def plot_arrows(
-    adata, colour=None, shape=None, size=None
-):
-    if 'X_pca' not in adata.obsm:
-        raise ValueError('PCA not performed on AnnData yet!')
-    adata.obs.period = adata.obs.period.astype(int)
-    X_pca = adata.obsm['X_pca']
-    # TODO: % var
-    column_idx = [f'PC{i + 1}' for i in range(X_pca.shape[1])]
-    data = pd.DataFrame(X_pca, index=adata.obs_names, columns=column_idx)
-    data['period'] = adata.obs['period']
-    data['sn'] = adata.obs['sn']
-    if colour:
-        data[colour] = adata.obs[colour]
-    if shape:
-        data[shape] = adata.obs[shape]
-    patients = data['sn'].unique()
-    get_colour = plt.colormaps['rainbow']
-    n = len(patients)
-    col_idx = np.linspace(0, 1, n)
-    fig, ax = plt.subplots()
-    for i, patient in zip(col_idx, patients):
-        # Subset patient data and sort by time
-        patient_data = data[data['sn'] == patient].sort_values(by='period')
-        print(patient_data)
-        x = patient_data['PC1'].values
-        y = patient_data['PC2'].values
-        ax.scatter(
-            x, y, color=get_colour(i), label=patient, alpha=0.6)
-        for j in range(len(x) - 1):
-            ax.arrow(
-                x[j], y[j],
-                x[j + 1] - x[j], y[j + 1] - y[j],
-                color=get_colour(i), alpha=1, head_width=0.3,
-                length_includes_head=True
-            )
-    ax.set_xlabel('PC1')
-    ax.set_ylabel('PC2')
-    ax.legend()
-    return fig
+sc.pp.pca(cvt_psych)
+fig = plot_arrows(cvt_psych)
+fig.set_size_inches(10, 6)
+filename = 'tmp/astral/fig/traj-psych-cvt.pdf'
+fig.savefig(filename)
 
+sc.pp.pca(cvt_psych_abs)
 fig = plot_arrows(cvt_psych_abs)
 fig.set_size_inches(10, 6)
 filename = 'tmp/astral/fig/traj-psych_abs-cvt.pdf'
-fig.savefig(filename)
-
-fig = plot_arrows(cvt)
-fig.set_size_inches(10, 6)
-filename = 'tmp/astral/fig/traj-all-cvt.pdf'
 fig.savefig(filename)
 
 cvt_multiple_pids = ['L0325S', 'L0476S', 'L0544S', 'L0561S', 'L0609S', 'L0646S']
@@ -641,6 +698,67 @@ sns.scatterplot(data=X_y, x='PC1', y='PC3', hue='final_label', ax=ax2)
 filepath = 'tmp/astral/fig/pca-1a-59x33.pdf'
 plt.savefig(filepath)
 
+##### Features #####
+
+prots_uhr = uhr_biomarkers.index[uhr_biomarkers.p < 0.05]
+
+
+results = [
+    result_prognostic_ancova,
+    result_psychotic,
+    result_remission,
+    # result_boruta,
+]
+
+# BH correction
+result = result_prognostic_ancova
+qvals = np.array([
+    multipletests(p, alpha=0.05, method='fdr_bh')[1]
+    for p in result.pvals
+])
+# Assumption: Order of columns is preserved
+symbols = reprocessed.loc[lyriks.columns, ['Description', 'Gene']]
+symbols['q'] = qvals.mean(axis=0)
+symbols_fil = symbols[symbols.q < 0.05]
+name = (
+    f'{result.metadata["version"]}-'
+    f'{result.metadata["selector"]}'
+)
+filepath = 'tmp/astral/biomarkers-' + name + '.csv'
+symbols_fil.sort_values(by='q').to_csv(filepath, float_format='%.3g')
+print(filepath)
+
+result = result_remission 
+result = result_psychotic
+# No BH correction
+pvals = np.array(result.pvals)
+# Assumption: Order of columns is preserved
+symbols = reprocessed.loc[lyriks.columns, ['Description', 'Gene']]
+symbols['p'] = pvals.mean(axis=0)
+symbols_fil = symbols[symbols.p < 0.05]
+name = (
+    f'{result.metadata["version"]}-'
+    f'{result.metadata["selector"]}'
+)
+filepath = 'tmp/astral/biomarkers-' + name + '.csv'
+symbols_fil.sort_values(by='p').to_csv(filepath, float_format='%.3g')
+print(filepath)
+
+# Boruta
+result = result_boruta
+ranks = np.array(result.ranks)
+# Assumption: Order of columns is preserved
+symbols = reprocessed.loc[lyriks.columns, ['Description', 'Gene']]
+symbols['Average rank'] = ranks.mean(axis=0)
+symbols_fil = symbols[symbols['Average rank'] <= 2]
+name = (
+    f'{result.metadata["version"]}-'
+    f'{result.metadata["selector"]}'
+)
+filepath = 'tmp/astral/biomarkers-' + name + '.csv'
+symbols_fil.sort_values(by='Average rank').to_csv(filepath, float_format='%.3g')
+print(filepath)
+
 ##### Venn #####
 
 # Mongan
@@ -654,9 +772,6 @@ mongan_prots = mongan.index[mongan.q < 0.05]
 # They cannot be detected by astral?
 # Any prognostic that was not detected by Mongan?
 
-
-result_prognostic_ancova.pvals
-
 # No BH correction
 pvals = np.array(result_prognostic_ancova.pvals)
 avg_p = pd.DataFrame({'p': pvals.mean(axis=0)}, index=lyriks.columns)
@@ -664,19 +779,30 @@ p_fil = avg_p[avg_p.p < 0.05]
 prots_progp = p_fil.index.tolist()
 len(prots_progp)
 
-features_1a = {
-    'Mongan et al.': set(mongan_prots),
-    'Prognostic (ANCOVA; p < 0.05)': set(prots_progp),
+proteins = {
+    'UHR biomarker': set(prots_p),
+    'Prognostic (ANCOVA; q < 0.05)': set(result_prognostic_ancova.features),
     'Psychotic (M0, M24)': set(result_psychotic.features),
-    'Boruta': set(result_boruta.features),
+    'Remission (ANCOVA; p < 0.05)': set(result.features),
 }
-venn(features_1a)
-filename = 'tmp/astral/fig/venn4-feats-mongan_progp_psychotic_boruta.pdf'
+venn(proteins)
+filename = 'tmp/astral/fig/venn4-feats-uhrp_progq_psychotic_remission.pdf'
 plt.savefig(filename)
 
+##### P-value #####
 
-# TODO: Plot ROC boruta again
-# TODO: SVM (other models)
+# Probability of no overlap between two sets of randomly chosen genes
+# Assumption: Choosing one gene does not affect the probability of the rest
+# being chosen.
+
+from math import comb
+
+def compute_p(n, a, b):
+    return comb(n - b, a) * comb(n - a, b) / (comb(n, a) * comb(n, b))
+
+n = lyriks.shape[1]
+compute_p(607, 10, 12)
+
 
 ##### Grid search #####   
 param_grid = {
