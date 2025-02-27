@@ -29,14 +29,30 @@ sample_sums <- colSums(pg_matrix, na.rm = T)
 scaling_ratio <- sample_sums / max(sample_sums, na.rm = T)
 norm_pgmatrix <- sweep(pg_matrix, 2, scaling_ratio, '/')
 lnmatrix <- log2(norm_pgmatrix)
-lmatrix <- log2(pg_matrix)
+# lmatrix <- log2(pg_matrix)
 
 # # Check that Novogene normalised values tally with ours
 # # Novogene normalised values tallies with ours!
-# file <- 'data/astral/raw/renorm-all_sample.csv'
-# reprocessed <- read.csv(file, row.names = 1)
-# reprocessed1 <- log2(reprocessed[, 3:ncol(reprocessed)])
+file <- 'data/astral/raw/reprocessed-all.csv'
+reprocessed <- read.csv(file, row.names = 1)
+reprocessed1 <- log2(reprocessed[, 3:ncol(reprocessed)])
 # reprocessed1[1:5, paste0('QC', 1:5)]
+
+prots_drop <- setdiff(rownames(pg_matrix), rownames(reprocessed))
+prots_processed <- setdiff(rownames(reprocessed), rownames(pg_matrix))
+# Ambiguous proteins are renamed by Novogene taking the first name, before
+# removal of completely missing features
+idx_ambiguous <- grepl(';', rownames(lnmatrix))
+prots_ambiguous <- rownames(lnmatrix)[idx_ambiguous]
+prots_renamed <- sapply(strsplit(prots_ambiguous, ';'), function(x) x[[1]])
+rownames(lnmatrix)[idx_ambiguous] <- prots_renamed
+
+# Proteins that are removed in reprocessed data are completely missing 
+prots_stilldrop <- setdiff(rownames(lnmatrix), rownames(reprocessed))
+lnmatrix <- lnmatrix[setdiff(rownames(lnmatrix), prots_stilldrop), ]
+# lmatrix <- lmatrix[setdiff(rownames(lnmatrix), prots_stilldrop), ]
+# x_drop <- lnmatrix[prots_stilldrop, ]
+# rowSums(is.na(x_drop))
 
 # Metadata
 # Inferring time of run
@@ -73,7 +89,6 @@ expt_meta1 <- rbind(expt_meta, qc_meta)
  
 file <- 'data/astral/metadata/metadata-all.csv'
 metadata_all <- read.csv(file, row.names=1)
-
 # Append class information
 metadata <- merge(
   expt_meta1, metadata_all,
@@ -91,10 +106,11 @@ colnames(lmatrix) <- rownames(metadata)[idx]
 
 # Subset lyriks study
 lyriks_qc_sids <- sort(grep('^[L|Q]', colnames(lnmatrix), value = T))
+# Drop features that are ambiguous or sparse
 lyriks <- lnmatrix[, lyriks_qc_sids]
-lyriks_unnorm <- lmatrix[, lyriks_qc_sids]
+# lyriks_unnorm <- lmatrix[, lyriks_qc_sids]
+dim(lyriks)
 lyriks1 <- lyriks[, 1:402]
-
 zlyriks <- lyriks
 zlyriks[is.na(zlyriks)] <- 0
 
@@ -113,12 +129,12 @@ metadata_lyriks[403:407, c('label', 'final_label', 'period')] <- 'QC'
 metadata_lyriks$period <- as.factor(metadata_lyriks$period)
 rownames(metadata_lyriks) <- metadata_lyriks$Sample.Name
 
-colnames(metadata_lyriks)
-metadata_lyriks$Polypeptide.Novogene.ID
-metadata_lyriks$final_label
-sum(metadata_lyriks$label == 'relapse')
-sum(metadata_lyriks$label == 'remit')
-metadata_lyriks$final_label[metadata_lyriks$label == 'relapse']
+# colnames(metadata_lyriks)
+# metadata_lyriks$Polypeptide.Novogene.ID
+# metadata_lyriks$final_label
+# sum(metadata_lyriks$label == 'relapse')
+# sum(metadata_lyriks$label == 'remit')
+# metadata_lyriks$final_label[metadata_lyriks$label == 'relapse']
 
 # file <- 'data/astral/metadata/metadata-csa.csv'
 # metadata_csa <- read.csv(file, row.names = 1)
@@ -406,8 +422,8 @@ print(idx)
 slyriks <- lyriks[, idx]
 metadata_slyriks <- metadata_lyriks[idx, ]
 
-file <- 'data/astral/processed/metadata-lyriks.csv'
-write.csv(metadata_slyriks, file)
+# file <- 'data/astral/processed/metadata-lyriks.csv'
+# write.csv(metadata_slyriks, file)
 
 # Impute in batch aware fashion
 # Only features with < 50% missing values in all batches
@@ -419,12 +435,10 @@ lyriks_batches <- split_cols(slyriks, ext_date)
 PCT_MISSING <- 0.5
 pct_na <- sapply(lyriks_batches, function(x) rowSums(is.na(x)) / ncol(x))
 to_impute <- apply(pct_na < PCT_MISSING, 1, all)
-prot_607 <- names(to_impute)[to_impute]
-flyriks <- slyriks[prot_607, ]
+prots_nonsparse <- names(to_impute)[to_impute]
+flyriks <- slyriks[prots_nonsparse, ]
 flyriks_batches <- split_cols(flyriks, ext_date)
-print(length(prot_607))
-rowSums(is.na(flyriks))
-dim(slyriks)
+print(length(prots_nonsparse))
 
 # flyriks_ft_pct_na <- rowSums(is.na(flyriks)) / ncol(flyriks)
 # ft_na30 <- names(flyriks_ft_pct_na)[flyriks_ft_pct_na > 0.3]
@@ -439,12 +453,12 @@ dim(slyriks)
 # file <- 'tmp/astral/fig/pca-flyriks-age.pdf'
 # ggsave(file, ax, width = 10, height = 6)
 
-# MVI: MinProb
-set.seed(0)
-iflyriks_batches <- flyriks_batches %>%
-  lapply(impute.MinProb, q = 0.1) %>%
-  lapply(data.matrix)
-iflyriks <- do.call(cbind, iflyriks_batches)
+# # MVI: MinProb
+# set.seed(0)
+# iflyriks_batches <- flyriks_batches %>%
+#   lapply(impute.MinProb, q = 0.1) %>%
+#   lapply(data.matrix)
+# iflyriks <- do.call(cbind, iflyriks_batches)
 
 flyriks[1:20, idx[1:5]]
 iflyriks[1:20, 1:5]
@@ -567,7 +581,6 @@ rmse_knn10 <- mapply(
 # metadata_slyriks$period <- as.numeric(as.character(metadata_slyriks$period))
 table(metadata_slyriks$Extraction.Date, metadata_slyriks$label)
 
-# TODO: Decide on class factors to include: (period, class, sex)
 # TODO: How to handle the difference in period better (low priority)
 
 # ComBat - Modelling class covariate
@@ -582,23 +595,22 @@ combat_lyriks <- ComBat(
 knn_lyriks[1:20, 1:5]
 combat_lyriks[1:20, 1:5]
 
-# Class-specific ComBat
-label <- metadata_slyriks[colnames(knn_lyriks), 'label']
-knn_lyriks_labels <- split_cols(knn_lyriks, label)
-str(knn_lyriks_labels[-2])
+# # Class-specific ComBat
+# label <- metadata_slyriks[colnames(knn_lyriks), 'label']
+# knn_lyriks_labels <- split_cols(knn_lyriks, label)
+# str(knn_lyriks_labels[-2])
+# 
+# # Do not correct cvt as they all come from the same batch
+# combat_lyriks_labels <- lapply(knn_lyriks_labels[-2], function(x) {
+#   ComBat(
+#     x,
+#     batch = metadata_slyriks[colnames(x), 'Extraction.Date'],
+#     ref.batch = '5/9/24' 
+#   )
+# })
+# combat_lyriks_labels1 <- c(combat_lyriks_labels, knn_lyriks_labels[2])
+# cscombat_lyriks <- do.call(cbind, combat_lyriks_labels1)
 
-# Do not correct cvt as they all come from the same batch
-combat_lyriks_labels <- lapply(knn_lyriks_labels[-2], function(x) {
-  ComBat(
-    x,
-    batch = metadata_slyriks[colnames(x), 'Extraction.Date'],
-    ref.batch = '5/9/24' 
-  )
-})
-combat_lyriks_labels1 <- c(combat_lyriks_labels, knn_lyriks_labels[2])
-cscombat_lyriks <- do.call(cbind, combat_lyriks_labels1)
-
-colnames(metadata_slyriks)
 ax <- ggplot_pca(
   cscombat_lyriks, metadata_slyriks,
   color = 'label', shape = 'period'
@@ -635,7 +647,6 @@ feats <- sample(rownames(combat_lyriks), 40)
 
 ##### Save data ##### 
 
-dim(combat_lyriks)
 file <- 'data/astral/processed/combat_knn5_lyriks.csv'
 write.csv(combat_lyriks, file)
 
