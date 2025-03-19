@@ -31,12 +31,16 @@ norm_pgmatrix <- sweep(pg_matrix, 2, scaling_ratio, '/')
 lnmatrix <- log2(norm_pgmatrix)
 # lmatrix <- log2(pg_matrix)
 
+
 # # Check that Novogene normalised values tally with ours
 # # Novogene normalised values tallies with ours!
 file <- 'data/astral/raw/reprocessed-all.csv'
 reprocessed <- read.csv(file, row.names = 1)
 reprocessed1 <- log2(reprocessed[, 3:ncol(reprocessed)])
 # reprocessed1[1:5, paste0('QC', 1:5)]
+
+dim(lnmatrix)
+dim(reprocessed1)
 
 prots_drop <- setdiff(rownames(pg_matrix), rownames(reprocessed))
 prots_processed <- setdiff(rownames(reprocessed), rownames(pg_matrix))
@@ -998,58 +1002,11 @@ length(lyriks_ft_nonzero)
 annot_sigq <- read.csv('data/astral/misc/annot_sigq365.csv', row.names = 1)
 annot_nonzero265 <- read.csv('data/astral/misc/annot_nonzero265.csv', row.names = 1)
 
-# TODO: Pathway / complex analysis?
-library(KEGGREST)
-
-# Convert UniProt IDs to KEGG IDs
-uniprot_ids <- rownames(annot_sigp)
-kegg_ids <- keggConv('genes', paste0('uniprot:', uniprot_ids))
-
-# keggLink may have hard-coded limit of 100 IDs
-# Split IDs into groups of 100 to avoid limit
-npergroup <- 100
-ngrps <- ceiling(length(kegg_ids) / npergroup)
-groups <- gl(ngrps, npergroup, length(kegg_ids))
-list_ids <- split(kegg_ids, groups)
-kegg_pathways <- character()
-for (grp in list_ids) {
-  print(length(grp))
-  # some KEGG gene IDs do not have pathways while others have multiple
-  kegg_pathways <- c(kegg_pathways, keggLink('pathway', grp))
-}
-# Option 2: Under 100 IDs
-kegg_pathways <- c(kegg_pathways, keggLink('pathway', kegg_ids))
-kegg_ids %in% names(kegg_pathways)
-pathway_freq <- table(kegg_pathways) %>%
-  sort(decreasing = TRUE) %>%
-  data.frame() %>%
-  head(20)
-
-# Alternative method to get pathway names
-# pathway_names <- lapply(kegg_pathways, function(pw) keggGet(pw)[[1]]$NAME)
-pathway_annot <- keggList('pathway')
-names(pathway_annot) <- names(pathway_annot) %>%
-  substring(4) %>%
-  paste0('path:hsa', .)
-idx <- match(pathway_freq$kegg_pathways, names(pathway_annot))
-kegg_names <- pathway_annot[idx]
-names_freq <- cbind(name = kegg_names, pathway_freq)
-
-ax <- ggplot(names_freq) +
-  geom_col(aes(
-    x = Freq,
-    y = reorder(name, Freq, sum)
-  )) +
-  labs(y = "KEGG")
-  # scale_x_continuous(breaks = seq(0, max(kegg$Freq), by = 1))
-file <- "tmp/astral/fig/annot_sigp-kegg.pdf"
-ggsave(file, ax, width = 9, height = 4)
-
 # TODO: Obtain Mongan proteins
 file <- 'data/astral/misc/mongan-etable5.csv'
-mongan <- read.csv(file)
-colnames(mongan) <- c('uniprot', 'name', 'F', 'p', 'q')
-rownames(mongan) <- mongan$uniprot
+mongan <- read.csv(file, row.names = 1)
+# colnames(mongan) <- c('uniprot', 'name', 'F', 'p', 'q')
+rownames(mongan)[mongan$q < 0.05]
 
 mongan56 <- mongan[mongan$p < 0.05, ]
 mongan35 <- mongan[mongan$q < 0.05, ]
