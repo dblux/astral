@@ -57,8 +57,8 @@ md = pd.read_csv(file, index_col=0, header=0)
 filepath = 'data/astral/raw/report.pg_matrix.tsv'
 raw = pd.read_csv(filepath, sep='\t', index_col=0, header=0)
 
-filename = 'data/astral/raw/reprocessed-all.csv'
-reprocessed = pd.read_csv(filename, index_col=0, header=0)
+filepath = 'data/astral/raw/reprocessed-all.csv'
+reprocessed = pd.read_csv(filepath, index_col=0, header=0)
 
 # Model 1A: cvt (M0) v.s. non-cvt (M0)
 # Prognostic markers
@@ -131,12 +131,6 @@ stats = pd.DataFrame(
 filename = 'tmp/astral/1a-prognostic_ancova.csv'
 stats.to_csv(filename)
 
-filename = 'tmp/astral/1a-prognostic_ancova.csv'
-prognostic_1a = pd.read_csv(filename, index_col=0, header=0)
-sum(prognostic_1a.q < 0.05)
-prots_1a_p = prognostic_1a.index[prognostic_1a.p < 0.01] # q-value
-len(prots_1a_p)
-
 # UHR biomarkers: control (M0/12/24) v.s. maintain (M0)
 # mnt patients are most likely medicated after M0 
 md_3 = md[(md.final_label.isin(['ctrl', 'mnt'])) & (md.period == 0)]
@@ -164,17 +158,8 @@ stats = pd.DataFrame(
     {'p': pvalues, 'q': qvalues},
     index=lyriks.columns
 )
-prots_p = stats.index[stats.p < 0.05] # p-value
-prots_q = stats.index[stats.q < 0.05] # q-value
-
 filename = 'tmp/astral/uhr_3a-ancova.csv'
 stats.to_csv(filename)
-
-filename = 'tmp/astral/uhr_3a-ancova.csv'
-uhr_biomarkers = pd.read_csv(filename, index_col=0, header=0)
-sum(uhr_biomarkers.q < 0.05)
-prots_uhr_p = uhr_biomarkers.index[uhr_biomarkers.p < 0.01] # q-value
-len(prots_uhr_p)
 
 # mnt v.s. early_remit
 md_2b = md[(md.label.isin(['maintain', 'early_remit'])) & (md.period == 0)]
@@ -202,21 +187,15 @@ stats = pd.DataFrame(
 filename = 'tmp/astral/2b-prognostic_ancova.csv'
 stats.to_csv(filename)
 
-filename = 'tmp/astral/2b-prognostic_ancova.csv'
-prognostic_2b = pd.read_csv(filename, index_col=0, header=0)
-sum(prognostic_2b.q < 0.05)
-prots_2b_p = prognostic_2b.index[prognostic_2b.p < 0.01] # q-value
-len(prots_2b_p)
-
 # Paired t-test
-cvt_pids = [
+cvt_pids = set([
     md.loc[sid, 'sn'] for sid in lyriks.index
     if md.loc[sid, 'final_label'] == 'cvt'
-]
+])
 ### Pairs: (0, 24)
 cvt_pairs = [
     (sid + '_0', sid + '_24') for sid in cvt_pids
-    if sid + '_24' in lyriks.index
+    if sid + '_24' not in lyriks.index
 ]
 cvt1, cvt2 = zip(*cvt_pairs)
 cvt1, cvt2 = list(cvt1), list(cvt2) 
@@ -233,16 +212,10 @@ stats = pd.DataFrame(
     {'p': pvalues, 'q': qvalues},
     index=lyriks.columns
 )
+sum(stats.p < 0.01)
 
 filename = 'tmp/astral/1a-psychotic_ttest.csv'
 stats.to_csv(filename)
-
-filename = 'tmp/astral/1a-psychotic_ttest.csv'
-psychotic_biomarkers = pd.read_csv(filename, index_col=0, header=0)
-sum(psychotic_biomarkers.q < 0.05)
-prots_psychotic_p = psychotic_biomarkers.index[psychotic_biomarkers.p < 0.01]
-len(prots_psychotic_p)
-
 
 # TODO: Investigate medication effects
 # maintain (M0) v.s. maintain (M12/24)
@@ -989,14 +962,23 @@ plt.savefig(filepath)
 
 ##### Features #####
 
-prots_uhr = uhr_biomarkers.index[uhr_biomarkers.p < 0.05]
-
-results = [
-    result_prognostic_ancova,
-    result_psychotic,
-    result_remission,
-    # result_boruta,
+# Write gene descriptions of signatures  
+symbols = reprocessed.loc[lyriks.columns, ['Description', 'Gene']]
+filepaths = [
+    'tmp/astral/1a-prognostic_ancova.csv',
+    'tmp/astral/1a-psychotic_ttest.csv',
+    'tmp/astral/2b-prognostic_ancova.csv',
+    'tmp/astral/uhr_3a-ancova.csv'
 ]
+for filepath in filepaths:
+    signatures = pd.read_csv(filepath, index_col=0) 
+    signatures = signatures.loc[signatures.p < 0.01, 'p']
+    signatures.sort_values(inplace=True)
+    symbols_f = symbols.loc[signatures.index]
+    symbols_f['p'] = signatures
+    print(symbols_f.shape)
+    writepath = filepath[:11] + 'signatures-' + filepath[11:]
+    symbols_f.to_csv(writepath, float_format='%.3g')
 
 # BH correction
 result = result_prognostic_ancova
