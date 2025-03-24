@@ -133,12 +133,80 @@ metadata_lyriks[403:407, c('label', 'final_label', 'period')] <- 'QC'
 metadata_lyriks$period <- as.factor(metadata_lyriks$period)
 rownames(metadata_lyriks) <- metadata_lyriks$Sample.Name
 
-# colnames(metadata_lyriks)
-# metadata_lyriks$Polypeptide.Novogene.ID
-# metadata_lyriks$final_label
-# sum(metadata_lyriks$label == 'relapse')
-# sum(metadata_lyriks$label == 'remit')
-# metadata_lyriks$final_label[metadata_lyriks$label == 'relapse']
+# printing
+colnames(metadata_lyriks)
+length(na.omit(unique(metadata_lyriks$sn)))
+metadata_lyriks$Polypeptide.Novogene.ID
+metadata_lyriks$final_label
+dim(metadata_lyriks)
+dim(lyriks)
+colnames(lyriks)
+
+### Distribution of participants
+metadata_lyriks %>%
+  subset(!is.na(sn), select = c('sn', 'label')) %>%
+  group_by(sn) %>%
+  slice_head(n = 1) %>%
+  ungroup() %>%
+  count(label)
+
+### Demographics analysis (statistical tests)
+demographics <- metadata_lyriks %>%
+  arrange(sn, period) %>%
+  subset(!is.na(sn), select = c('sn', 'age', 'gender', 'label')) %>%
+  group_by(sn) %>%
+  slice_head(n = 1) %>%
+  ungroup()
+
+# Add ethnicity to metadata
+file <- 'data/lyriks/metadata/metadata_74.csv'
+metadata74 <- read.csv(file, row.names = 1)
+ethnicity <- unique(metadata74[, c('sn', 'eth')])
+rownames(ethnicity) <- NULL 
+
+demographics1 <- merge(demographics, ethnicity, by = 'sn')
+demographics2 <- subset(demographics1, label != 'control')
+demographics2$label <- ifelse(
+  demographics2$label == 'convert',
+  'converter', 'non-converter'
+)
+
+demographics2 %>%
+  group_by(label) %>%
+  summarize(mean(age), sd(age))
+
+table(demographics2$label)
+table(demographics2$gender, demographics2$label)
+table(demographics2$eth, demographics2$label)
+
+# Statistical tests
+split(demographics2$age, demographics2$label)
+unpaired_ttest <- t.test(age ~ label, data = demographics2)
+
+gender_label <- table(demographics2$gender, demographics2$label)
+chisq_gender <- chisq.test(gender_label)
+fisher_gender <- fisher.test(gender_label)
+print(chisq_gender)
+print(fisher_gender)
+
+eth_label <- table(demographics2$eth, demographics2$label)
+chisq_eth <- chisq.test(eth_label)
+fisher_eth <- fisher.test(eth_label)
+print(chisq_eth)
+print(fisher_eth)
+
+# Checking of relapse and ambiguous remit individuals
+metadata_lyriks %>%
+  subset(
+    label %in% c('remit', 'relapse'),
+    select = c('sn', 'label', 'final_label', 'caarms_status')
+  )
+
+metadata_lyriks %>%
+  subset(
+    label == 'convert', 
+    select = c('sn', 'label', 'final_label')
+  )
 
 # file <- 'data/astral/metadata/metadata-csa.csv'
 # metadata_csa <- read.csv(file, row.names = 1)
