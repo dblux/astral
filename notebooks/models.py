@@ -9,7 +9,6 @@ import statsmodels.api as sm
 
 from boruta import BorutaPy
 from dataclasses import dataclass, field
-from matplotlib_venn import venn2, venn3
 from scipy.stats import f, ttest_ind, ttest_rel, rankdata
 from sklearn.decomposition import PCA
 from sklearn.ensemble import RandomForestClassifier
@@ -51,14 +50,22 @@ def unpaired_ttest(x, y):
 
 file = 'data/astral/processed/combat_knn5_lyriks.csv'
 lyriks = pd.read_csv(file, index_col=0, header=0).T
+
+file = 'data/astral/processed/combat_knn5_lyriks-605_402.csv'
+lyriks402 = pd.read_csv(file, index_col=0, header=0).T
+
 file = 'data/astral/processed/metadata-lyriks.csv'
 md = pd.read_csv(file, index_col=0, header=0)
+
+file = 'data/astral/processed/metadata-lyriks407.csv'
+md407 = pd.read_csv(file, index_col=0, header=0)
 
 filepath = 'data/astral/raw/report.pg_matrix.tsv'
 raw = pd.read_csv(filepath, sep='\t', index_col=0, header=0)
 
 filepath = 'data/astral/raw/reprocessed-all.csv'
 reprocessed = pd.read_csv(filepath, index_col=0, header=0)
+
 
 # Model 1A: cvt (M0) v.s. non-cvt (M0)
 # Prognostic markers
@@ -102,119 +109,138 @@ X = lyriks_2b
 print(y.value_counts()) # imbalanced
 # Late remit patients: 9
 
+
 ##### Biomarkers (entire data set) #####
+
+lyriks = lyriks402
+md = md407[md407.label != 'QC']
+md['period'] = md['period'].astype(int)
 
 # Psychosis prognostic (ANCOVA, BH)
 
 # Dataframe with proteomic and clinical features
-lyriks_1a_y = pd.concat([
-    lyriks_1a,
-    md_1a.final_label.replace({'rmt': 0, 'mnt': 0, 'cvt': 1}),
+# relapse is labelled as mnt
+md_1a = md.loc[(md.final_label != 'ctrl') & (md.period == 0)]
+data = pd.concat([
+    lyriks.loc[md_1a.index],
+    md_1a.final_label.replace({
+        'rmt': 'non-cvt', 'mnt': 'non-cvt'
+    }).astype('category').cat.reorder_categories(['non-cvt', 'cvt']),
     md_1a[['age', 'gender']]
 ], axis=1)
+print(data.final_label.value_counts()) # imbalanced
+print(data.final_label.cat.categories)
 
 pvalues = []
-for prot in lyriks_1a_y.columns[:-3]:
+coeffs = []
+for prot in data.columns[:-3]:
     model = ols(
         f'{prot} ~ final_label + age + gender',
-        data=lyriks_1a_y
+        data=data
     ).fit()
-    pvalues.append(model.pvalues['final_label'])
+    pvalues.append(model.pvalues[1])
+    coeffs.append(model.params[1])
     # table = sm.stats.anova_lm(model, typ=2)
+
+print(model.pvalues.index[1])
+print(model.pvalues)
 
 _, qvalues, _, _ = multipletests(pvalues, alpha=0.05, method='fdr_bh')
 stats = pd.DataFrame(
-    {'p': pvalues, 'q': qvalues},
+    {'Coefficient': coeffs, 'p': pvalues, 'q': qvalues},
     index=lyriks.columns
 )
-
-filename = 'tmp/astral/1a-prognostic_ancova.csv'
+filename = 'tmp/astral/lyriks402/1a-prognostic_ancova.csv'
 stats.to_csv(filename)
 
 # UHR biomarkers: control (M0/12/24) v.s. maintain (M0)
 # mnt patients are most likely medicated after M0 
-md_3 = md[(md.final_label.isin(['ctrl', 'mnt'])) & (md.period == 0)]
-y = md_3.final_label.replace({'ctrl': 0, 'mnt': 1})
-lyriks_3 = lyriks.loc[y.index]
-# Prepare dataframe
-lyriks_3.columns = lyriks_3.columns.str.replace(';', '')
-lyriks_3['final_label'] = md.loc[lyriks_3.index, 'final_label']
-lyriks_3['age'] = md.loc[lyriks_3.index, 'age']
-lyriks_3['gender'] = md.loc[lyriks_3.index, 'gender']
-print(y.value_counts()) # imbalanced
+md_3 = md[(md.label.isin(['control', 'maintain'])) & (md.period == 0)]
+lyriks_3 = lyriks.loc[md_3.index]
+data = lyriks_3.join(md_3[['label', 'age', 'gender']])
+print(data.label.value_counts()) # imbalanced
 
 pvalues = []
-for prot in lyriks_3.columns[:-3]:
+coeffs = []
+for prot in data.columns[:-3]:
     model = ols(
-        f'{prot} ~ final_label + age + gender',
-        data=lyriks_3
+        f'{prot} ~ label + age + gender',
+        data=data
     ).fit()
-    print(model.pvalues.index[1])
     pvalues.append(model.pvalues[1])
-    # table = sm.stats.anova_lm(model, typ=2)
+    coeffs.append(model.params[1])
+
+print(model.pvalues.index[1])
 
 _, qvalues, _, _ = multipletests(pvalues, alpha=0.05, method='fdr_bh')
 stats = pd.DataFrame(
-    {'p': pvalues, 'q': qvalues},
+    {'Coefficient': coeffs, 'p': pvalues, 'q': qvalues},
     index=lyriks.columns
 )
-filename = 'tmp/astral/uhr_3a-ancova.csv'
+filename = 'tmp/astral/lyriks402/uhr_3a-ancova.csv'
 stats.to_csv(filename)
 
 # mnt v.s. early_remit
 md_2b = md[(md.label.isin(['maintain', 'early_remit'])) & (md.period == 0)]
-lyriks_2b_y = pd.concat([
-    lyriks.loc[md_2b.index],
-    md_2b.label.replace({'maintain': 0, 'early_remit': 1}),
-    md_2b[['age', 'gender']]
-], axis=1)
+md_2b.label = md_2b.label.astype('category').cat.reorder_categories([
+    'maintain', 'early_remit'
+])
+lyriks_2b = lyriks.loc[md_2b.index]
+data = lyriks_2b.join(md_2b[['label', 'age', 'gender']])
 
 pvalues = []
-for prot in lyriks_2b_y.columns[:-3]:
+coeffs = []
+for prot in data.columns[:-3]:
     model = ols(
         f'{prot} ~ label + age + gender',
-        data=lyriks_2b_y
+        data=data
     ).fit()
-    pvalues.append(model.pvalues['label'])
-    # table = sm.stats.anova_lm(model, typ=2)
+    pvalues.append(model.pvalues[1])
+    coeffs.append(model.params[1])
+
+print(model.pvalues.index[1])
 
 _, qvalues, _, _ = multipletests(pvalues, alpha=0.05, method='fdr_bh')
 stats = pd.DataFrame(
-    {'p': pvalues, 'q': qvalues},
+    {'Coefficient': coeffs, 'p': pvalues, 'q': qvalues},
     index=lyriks.columns
 )
 
-filename = 'tmp/astral/2b-prognostic_ancova.csv'
+filename = 'tmp/astral/lyriks402/2b-prognostic_ancova.csv'
 stats.to_csv(filename)
 
 # Paired t-test
 cvt_pids = set([
-    md.loc[sid, 'sn'] for sid in lyriks.index
-    if md.loc[sid, 'final_label'] == 'cvt'
+    md407.loc[sid, 'sn'] for sid in lyriks.index
+    if md407.loc[sid, 'final_label'] == 'cvt'
 ])
 ### Pairs: (0, 24)
 cvt_pairs = [
     (sid + '_0', sid + '_24') for sid in cvt_pids
-    if sid + '_24' not in lyriks.index
+    if sid + '_24' in lyriks.index
 ]
 cvt1, cvt2 = zip(*cvt_pairs)
 cvt1, cvt2 = list(cvt1), list(cvt2) 
 
-pvalues = [
+# t-statistic is np.mean(a - b) / se
+paired_ttests = [
     ttest_rel(
-        lyriks.loc[cvt1, prot],
-        lyriks.loc[cvt2, prot]
-    ).pvalue
+        lyriks.loc[cvt2, prot],
+        lyriks.loc[cvt1, prot]
+    )
     for prot in lyriks.columns
 ]
+
+res = [(test.statistic, test.pvalue) for test in paired_ttests]
+tstats, pvalues = zip(*res)
 _, qvalues, _, _ = multipletests(pvalues, alpha=0.05, method='fdr_bh')
 stats = pd.DataFrame(
-    {'p': pvalues, 'q': qvalues},
+    {'t': tstats, 'p': pvalues, 'q': qvalues},
     index=lyriks.columns
 )
 sum(stats.p < 0.01)
 
-filename = 'tmp/astral/1a-psychotic_ttest.csv'
+filename = 'tmp/astral/lyriks402/1a-psychotic_ttest.csv'
 stats.to_csv(filename)
 
 # TODO: Investigate medication effects
@@ -651,6 +677,8 @@ with open(filename, 'rb') as file:
 
 len(result_boruta.features)
 
+result_remission.metadata
+
 ##### Evaluation ##### 
 
 result = result_elasticnet
@@ -965,20 +993,20 @@ plt.savefig(filepath)
 # Write gene descriptions of signatures  
 symbols = reprocessed.loc[lyriks.columns, ['Description', 'Gene']]
 filepaths = [
-    'tmp/astral/1a-prognostic_ancova.csv',
-    'tmp/astral/1a-psychotic_ttest.csv',
-    'tmp/astral/2b-prognostic_ancova.csv',
-    'tmp/astral/uhr_3a-ancova.csv'
+    'tmp/astral/lyriks402/1a-prognostic_ancova.csv',
+    'tmp/astral/lyriks402/1a-psychotic_ttest.csv',
+    'tmp/astral/lyriks402/2b-prognostic_ancova.csv',
+    'tmp/astral/lyriks402/uhr_3a-ancova.csv'
 ]
 for filepath in filepaths:
     signatures = pd.read_csv(filepath, index_col=0) 
-    signatures = signatures.loc[signatures.p < 0.01, 'p']
-    signatures.sort_values(inplace=True)
+    signatures = signatures.loc[signatures.p < 0.01, [True, True, False]]
+    signatures.sort_values(by='p', inplace=True)
     symbols_f = symbols.loc[signatures.index]
-    symbols_f['p'] = signatures
-    print(symbols_f.shape)
-    writepath = filepath[:11] + 'signatures-' + filepath[11:]
-    symbols_f.to_csv(writepath, float_format='%.3g')
+    data = symbols_f.join(signatures)
+    writepath = filepath[:21] + 'signatures-' + filepath[21:]
+    print(writepath)
+    data.to_csv(writepath, float_format='%.3g')
 
 # BH correction
 result = result_prognostic_ancova
@@ -1037,22 +1065,22 @@ filepath = 'data/astral/etc/mongan-etable5.csv'
 mongan = pd.read_csv(filepath, index_col=0, header=0)
 mongan_prots = mongan.index[mongan.q < 0.05]
 
-filename = 'tmp/astral/1a-prognostic_ancova.csv'
+filename = 'tmp/astral/lyriks402/signatures-1a-prognostic_ancova.csv'
 prognostic_1a = pd.read_csv(filename, index_col=0, header=0)
 prots_prognostic_1a = prognostic_1a.index[prognostic_1a.p < 0.01] # q-value
-len(prots_1a_p)
+len(prots_prognostic_1a)
 
-filename = 'tmp/astral/1a-psychotic_ttest.csv'
+filename = 'tmp/astral/lyriks402/signatures-1a-psychotic_ttest.csv'
 psychotic_1a = pd.read_csv(filename, index_col=0, header=0)
 prots_psychotic_1a = psychotic_1a.index[psychotic_1a.p < 0.01] # q-value
 len(prots_psychotic_1a)
 
-filename = 'tmp/astral/2b-prognostic_ancova.csv'
+filename = 'tmp/astral/lyriks402/signatures-2b-prognostic_ancova.csv'
 prognostic_2b = pd.read_csv(filename, index_col=0, header=0)
 prots_prognostic_2b = prognostic_2b.index[prognostic_2b.p < 0.01] # q-value
 len(prots_prognostic_2b)
 
-filename = 'tmp/astral/uhr_3a-ancova.csv'
+filename = 'tmp/astral/lyriks402/signatures-uhr_3a-ancova.csv'
 uhr_3a = pd.read_csv(filename, index_col=0, header=0)
 prots_uhr_3a = uhr_3a.index[uhr_3a.p < 0.01] # q-value
 len(prots_uhr_3a)
@@ -1071,13 +1099,19 @@ len(prots_progp)
 
 # Biomarkers
 proteins = {
-    'Psychosis prognostic': set(prots_1a_p),
-    'Psychosis conversion': set(prots_psychotic_p),
-    'Remission prognostic': set(prots_2b_p),
-    'UHR': set(prots_uhr_p),
+    'Psychosis prognostic signature': set(prots_prognostic_1a),
+    'Psychosis conversion signature': set(prots_psychotic_1a),
+    'Remission prognostic signature': set(prots_prognostic_2b),
+    'UHR signature': set(prots_uhr_3a),
 }
-filename = 'tmp/astral/fig/venn4-biomarkers.pdf'
+venn(proteins)
+filename = 'tmp/astral/fig/venn4-signatures.pdf'
 plt.savefig(filename)
+
+# Analysing intersections
+set(prots_prognostic_1a).intersection(set(prots_psychotic_1a))
+set(prots_uhr_3a).intersection(set(prots_prognostic_2b))
+
 
 # Perkins, Mongan (35), Prognostic, Psychotic
 filepath = 'data/astral/etc/perkins.csv'
