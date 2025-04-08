@@ -31,15 +31,12 @@ norm_pgmatrix <- sweep(pg_matrix, 2, scaling_ratio, '/')
 lnmatrix <- log2(norm_pgmatrix)
 # lmatrix <- log2(pg_matrix)
 
-
 # # Check that Novogene normalised values tally with ours
 # # Novogene normalised values tallies with ours!
-file <- 'data/astral/raw/reprocessed-all.csv'
+file <- 'data/astral/raw/reprocessed-data.csv'
 reprocessed <- read.csv(file, row.names = 1)
 reprocessed1 <- log2(reprocessed[, 3:ncol(reprocessed)])
 # reprocessed1[1:5, paste0('QC', 1:5)]
-
-dim(lnmatrix)
 dim(reprocessed1)
 
 prots_drop <- setdiff(rownames(pg_matrix), rownames(reprocessed))
@@ -56,7 +53,7 @@ prots_stilldrop <- setdiff(rownames(lnmatrix), rownames(reprocessed))
 lnmatrix <- lnmatrix[setdiff(rownames(lnmatrix), prots_stilldrop), ]
 # lmatrix <- lmatrix[setdiff(rownames(lnmatrix), prots_stilldrop), ]
 # x_drop <- lnmatrix[prots_stilldrop, ]
-# rowSums(is.na(x_drop))
+dim(lnmatrix)
 
 # Metadata
 # Inferring time of run
@@ -106,7 +103,7 @@ metadata[qc_sids_short, 'Study'] <- 'QC'
 # Rename colnames of lnmatrix
 idx <- match(colnames(lnmatrix), metadata$Polypeptide.Novogene.ID)
 colnames(lnmatrix) <- rownames(metadata)[idx]
-colnames(lmatrix) <- rownames(metadata)[idx]
+# colnames(lmatrix) <- rownames(metadata)[idx]
 
 # Subset lyriks study
 lyriks_qc_sids <- sort(grep('^[L|Q]', colnames(lnmatrix), value = T))
@@ -132,15 +129,16 @@ metadata_lyriks <- merge(
 metadata_lyriks[403:407, c('label', 'final_label', 'period')] <- 'QC'
 metadata_lyriks$period <- as.factor(metadata_lyriks$period)
 rownames(metadata_lyriks) <- metadata_lyriks$Sample.Name
+dim(metadata_lyriks)
+# write.csv(metadata_lyriks, 'data/astral/metadata/metadata-lyriks407.csv')
 
 # printing
 colnames(metadata_lyriks)
-length(na.omit(unique(metadata_lyriks$sn)))
-metadata_lyriks$Polypeptide.Novogene.ID
-metadata_lyriks$final_label
+colnames(lyriks)
 dim(metadata_lyriks)
 dim(lyriks)
-colnames(lyriks)
+
+##### Demographics #####
 
 ### Distribution of participants
 metadata_lyriks %>%
@@ -150,13 +148,29 @@ metadata_lyriks %>%
   ungroup() %>%
   count(label)
 
-### Demographics analysis (statistical tests)
+# Median duration to psychosis conversion
+mth_cvt <- metadata_lyriks %>%
+  subset(
+    label == 'convert' & period == 24
+  ) %>%
+  select('month_of_conversion')
+print(mth_cvt)
+median(pull(mth_cvt))
+
 demographics <- metadata_lyriks %>%
   arrange(sn, period) %>%
   subset(!is.na(sn), select = c('sn', 'age', 'gender', 'label')) %>%
   group_by(sn) %>%
   slice_head(n = 1) %>%
   ungroup()
+
+demographics %>%
+  summarise(mean(age), sd(age))
+
+gender_cnt <- demographics %>%
+  pull(gender) %>%
+  table()
+gender_cnt / 135
 
 # Add ethnicity to metadata
 file <- 'data/lyriks/metadata/metadata_74.csv'
@@ -487,12 +501,16 @@ metadata_lyriks %>%
 identical(rownames(metadata_lyriks), colnames(lyriks))
 idx <- subset(
   metadata_lyriks,
-  !(label %in% c('remit', 'relapse', 'QC'))
+  label != 'QC' 
+  # !(label %in% c('remit', 'relapse', 'QC'))
 ) %>%
   rownames()
-print(idx)
+
 slyriks <- lyriks[, idx]
 metadata_slyriks <- metadata_lyriks[idx, ]
+
+colnames(metadata_lyriks)
+unique(metadata_lyriks$label)
 
 # file <- 'data/astral/processed/metadata-lyriks.csv'
 # write.csv(metadata_slyriks, file)
@@ -586,7 +604,7 @@ dropout <- function(x, r, s, shape1, shape2) {
 }
 
 # Drop out 
-set.seed(0)
+set.seed(2)
 mlyriks_batches <- lapply(
   f265lyriks_batches, dropout,
   r = 3, s = -11, shape1 = 0.8, shape2 = 4
@@ -601,6 +619,8 @@ mlyriks_batches1 <- mlyriks_batches %>%
   lapply(function(x) x[idx, ])
 lapply(mlyriks_batches1, dim)
 
+f238lyriks_batches
+
 # pct_zero_batches1 <- mlyriks_batches1 %>%
 #   sapply(function(x) rowSums(is.na(x)) / ncol(x))
 # str(mlyriks_batches1)
@@ -613,7 +633,15 @@ knn_batches3 <- mlyriks_batches1 %>%
   lapply(function(x) x$data)
 rmse_knn3 <- mapply(
   function(x, y) mean((data.matrix(x) - y) ^ 2) ^ 0.5,
-  f238lyriks_batches, knn_batches
+  f238lyriks_batches, knn_batches3
+)
+
+knn_batches4 <- mlyriks_batches1 %>%
+  lapply(function(x) impute.knn(data.matrix(x), k = 4)) %>%
+  lapply(function(x) x$data)
+rmse_knn4 <- mapply(
+  function(x, y) mean((data.matrix(x) - y) ^ 2) ^ 0.5,
+  f238lyriks_batches, knn_batches4
 )
 
 knn_batches5 <- mlyriks_batches1 %>%
@@ -621,7 +649,15 @@ knn_batches5 <- mlyriks_batches1 %>%
   lapply(function(x) x$data)
 rmse_knn5 <- mapply(
   function(x, y) mean((data.matrix(x) - y) ^ 2) ^ 0.5,
-  f238lyriks_batches, knn_batches
+  f238lyriks_batches, knn_batches5
+)
+
+knn_batches6 <- mlyriks_batches1 %>%
+  lapply(function(x) impute.knn(data.matrix(x), k = 6)) %>%
+  lapply(function(x) x$data)
+rmse_knn6 <- mapply(
+  function(x, y) mean((data.matrix(x) - y) ^ 2) ^ 0.5,
+  f238lyriks_batches, knn_batches6
 )
 
 knn_batches10 <- mlyriks_batches1 %>%
@@ -629,8 +665,12 @@ knn_batches10 <- mlyriks_batches1 %>%
   lapply(function(x) x$data)
 rmse_knn10 <- mapply(
   function(x, y) mean((data.matrix(x) - y) ^ 2) ^ 0.5,
-  f238lyriks_batches, knn_batches
+  f238lyriks_batches, knn_batches10
 )
+
+print(rmse_knn4)
+print(rmse_knn5)
+print(rmse_knn6)
 
 # minprob_batches <- mlyriks_batches1 %>%
 #   lapply(impute.MinProb, q = 0.1) %>%
