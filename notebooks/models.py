@@ -48,24 +48,25 @@ def unpaired_ttest(x, y):
     return t_statistic, p_value
 
 
-file = 'data/astral/processed/combat_knn5_lyriks.csv'
-lyriks = pd.read_csv(file, index_col=0, header=0).T
+# file = 'data/astral/processed/combat_knn5_lyriks.csv'
+# lyriks = pd.read_csv(file, index_col=0, header=0).T
 
 file = 'data/astral/processed/combat_knn5_lyriks-605_402.csv'
-lyriks402 = pd.read_csv(file, index_col=0, header=0).T
+lyriks = pd.read_csv(file, index_col=0, header=0).T
 
-file = 'data/astral/processed/metadata-lyriks.csv'
-md = pd.read_csv(file, index_col=0, header=0)
+# file = 'data/astral/processed/metadata-lyriks.csv'
+# md = pd.read_csv(file, index_col=0, header=0)
 
 file = 'data/astral/processed/metadata-lyriks407.csv'
-md407 = pd.read_csv(file, index_col=0, header=0)
+md = pd.read_csv(file, index_col=0, header=0)
+md = md[md.label != 'QC']
+md['period'] = md['period'].astype(int)
 
 filepath = 'data/astral/raw/report.pg_matrix.tsv'
 raw = pd.read_csv(filepath, sep='\t', index_col=0, header=0)
 
 filepath = 'data/astral/raw/reprocessed-all.csv'
 reprocessed = pd.read_csv(filepath, index_col=0, header=0)
-
 
 # Model 1A: cvt (M0) v.s. non-cvt (M0)
 # Prognostic markers
@@ -74,7 +75,6 @@ md_1a = md[(md.final_label != 'ctrl') & (md.period == 0)]
 y = md_1a.final_label.replace({'rmt': 0, 'mnt': 0, 'cvt': 1})
 lyriks_1a = lyriks.loc[y.index]
 X = lyriks_1a
-X.shape
 print(y.value_counts()) # imbalanced
 
 # Model 1B: cvt (M0) v.s. maintain (M0)
@@ -109,12 +109,7 @@ X = lyriks_2b
 print(y.value_counts()) # imbalanced
 # Late remit patients: 9
 
-
 ##### Biomarkers (entire data set) #####
-
-lyriks = lyriks402
-md = md407[md407.label != 'QC']
-md['period'] = md['period'].astype(int)
 
 # Psychosis prognostic (ANCOVA, BH)
 
@@ -257,9 +252,8 @@ mongan_prots = mongan.index[mongan.q < 0.05]
 in_astral = mongan_prots.isin(lyriks.columns)
 missing_astral = mongan_prots[~in_astral]
 mongan_prots_astral = mongan_prots[in_astral]
-mongan_prots_idx = lyriks.columns.get_indexer(mongan_prots_astral)
-len(mongan_prots)
 len(mongan_prots_astral)
+mongan_prots33_idx = lyriks.columns.get_indexer(mongan_prots_astral)
 set(mongan_prots) - set(mongan_prots_astral)
 # mongan_prots[~mongan_prots.isin(reprocessed.index)]
 # sum(reprocessed.index == 'P43320')
@@ -271,8 +265,15 @@ mongan_prots10 = pd.Index([
 ])
 in_astral10 = mongan_prots10.isin(lyriks.columns)
 mongan_prots10_astral = mongan_prots10[in_astral10]
-print(mongan_prots10_astral.shape)
 mongan_prots10_idx = lyriks.columns.get_indexer(mongan_prots10)
+len(mongan_prots10_idx)
+
+filepath = 'data/astral/etc/perkins.csv'
+perkins = pd.read_csv(filepath, index_col=0)
+prots_perkins = perkins['UniProt/CAS'][
+    perkins['UniProt/CAS'].str.startswith(('P', 'Q'))]
+prots_perkins_idx = lyriks.columns.get_indexer(prots_perkins)
+# only 3 proteins present in lyriks dataset
 
 ### ElasticNet selected features
 
@@ -288,8 +289,8 @@ coeff = pd.DataFrame({
 
 prots_elastic10 = coeff.Coefficient.abs().nlargest(10).index
 prots_elastic30 = coeff.Coefficient.abs().nlargest(30).index
-prots_idx_elastic10  = lyriks.columns.get_indexer(prots_elastic10)
-prots_idx_elastic30  = lyriks.columns.get_indexer(prots_elastic30)
+prots_idx_elastic10 = lyriks.columns.get_indexer(prots_elastic10)
+prots_idx_elastic30 = lyriks.columns.get_indexer(prots_elastic30)
 coeff.loc[prots_elastic30]
 
 ### Direction-agnostic changes in psychotic (M0, M24)
@@ -325,8 +326,8 @@ cross_validators = {
 
 # Run detail
 result = Result({
-    'version': '1a',
-    'selector': 'mongan10',
+    'version': '2b',
+    'selector': 'prognostic_ancova',
     'model': 'elasticnet',
     'validator': 'kfold',
     'snapshot': {}, 
@@ -340,6 +341,45 @@ for i, (train_idx, test_idx) in enumerate(cross_validator.split(X, y)):
     X_train, X_test = X.iloc[train_idx].values, X.iloc[test_idx].values
     y_train, y_test = y.iloc[train_idx].values, y.iloc[test_idx].values
     match result.metadata:
+        case {'selector': 'prognostic_ancova'}: 
+            data_train = pd.concat([
+                X.loc[train_sids],
+                md.loc[train_sids, ['age', 'gender']],
+            ], axis=1)
+            data_train['final_label'] = y_train
+            # ANCOVA
+            pvalues = []
+            coefs = []
+            for prot in data_train.columns[:-3]:
+                model = ols(
+                    f'{prot} ~ final_label + age + gender',
+                    data=data_train
+                ).fit()
+                pvalues.append(model.pvalues['final_label'])
+                coefs.append(model.params['final_label'])
+                # table = sm.stats.anova_lm(model, typ=2)
+            result.pvals.append(pvalues)
+            result.test_statistics.append(coefs)
+            _, qvalues, _, _ = multipletests(
+                pvalues, alpha=0.05, method='fdr_bh'
+            )
+            statvalues = pd.DataFrame(
+                {'p': pvalues, 'q': qvalues},
+                index=X.columns
+            )
+            prots = statvalues.index[statvalues.p < 0.01] # p-value
+            # prots = statvalues.index[statvalues.q < 0.05] # q-value
+            idx = X.columns.get_indexer(prots)
+            X_train_f = X_train[:, idx]
+            X_test_f = X_test[:, idx]
+            print(f'No. of features selected = {X_train_f.shape[1]}')
+        case {'selector': 'prognostic_ttest'}: 
+            selector = SelectFdr(unpaired_ttest, alpha=0.05)
+            X_train_f = selector.fit_transform(X_train, y_train)
+            result.pvals.append(selector.pvalues_) # p-values from F-test
+            result.test_statistics.append(selector.scores_)
+            print(f'No. of features selected = {X_train_f.shape[1]}')
+            X_test_f = selector.transform(X_test)
         case {'selector': 'psychotic_ttest'}: 
             # paired t-test
             cvt_pids = [
@@ -373,41 +413,11 @@ for i, (train_idx, test_idx) in enumerate(cross_validator.split(X, y)):
             # Paired t-test
             pvalues = [
                 ttest_rel(
-                    lyriks.loc[cvt1, prot],
-                    lyriks.loc[cvt2, prot]
+                    lyriks.loc[cvt2, prot],
+                    lyriks.loc[cvt1, prot]
                 ).pvalue
-                for prot in list(X)
+                for prot in X.columns 
             ]
-            result.pvals.append(pvalues)
-            _, qvalues, _, _ = multipletests(
-                pvalues, alpha=0.05, method='fdr_bh'
-            )
-            statvalues = pd.DataFrame(
-                {'p': pvalues, 'q': qvalues},
-                index=list(X)
-            )
-            prots = statvalues.index[statvalues.p < 0.05]
-            # prots = statvalues.index[statvalues.q < 0.05]
-            idx = X.columns.get_indexer(prots)
-            X_train_f = X_train[:, idx]
-            X_test_f = X_test[:, idx]
-            print(f'No. of features selected = {X_train_f.shape[1]}')
-        case {'selector': 'prognostic_ancova'}: 
-            data_train = pd.concat([
-                X.loc[train_sids],
-                md.loc[train_sids, ['age', 'gender']],
-            ], axis=1)
-            data_train['final_label'] = y_train
-            data_train.columns = data_train.columns.str.replace(';', '')
-            # ANCOVA
-            pvalues = []
-            for prot in data_train.columns[:-3]:
-                model = ols(
-                    f'{prot} ~ final_label + age + gender',
-                    data=data_train
-                ).fit()
-                pvalues.append(model.pvalues['final_label'])
-                # table = sm.stats.anova_lm(model, typ=2)
             result.pvals.append(pvalues)
             _, qvalues, _, _ = multipletests(
                 pvalues, alpha=0.05, method='fdr_bh'
@@ -416,19 +426,12 @@ for i, (train_idx, test_idx) in enumerate(cross_validator.split(X, y)):
                 {'p': pvalues, 'q': qvalues},
                 index=X.columns
             )
-            # prots = statvalues.index[statvalues.p < 0.05] # p-value
-            prots = statvalues.index[statvalues.q < 0.05] # q-value
+            prots = statvalues.index[statvalues.p < 0.05]
+            # prots = statvalues.index[statvalues.q < 0.05]
             idx = X.columns.get_indexer(prots)
             X_train_f = X_train[:, idx]
             X_test_f = X_test[:, idx]
             print(f'No. of features selected = {X_train_f.shape[1]}')
-        case {'selector': 'prognostic_ttest'}: 
-            selector = SelectFdr(unpaired_ttest, alpha=0.05)
-            X_train_f = selector.fit_transform(X_train, y_train)
-            result.pvals.append(selector.pvalues_) # p-values from F-test
-            result.test_statistics.append(selector.scores_)
-            print(f'No. of features selected = {X_train_f.shape[1]}')
-            X_test_f = selector.transform(X_test)
         case {'selector': 'boruta'}:
             selector = BorutaPy(
                 rf, n_estimators='auto', two_step=False,
@@ -439,9 +442,9 @@ for i, (train_idx, test_idx) in enumerate(cross_validator.split(X, y)):
             result.ranks.append(selector.ranking_)
             print(f'No. of features selected = {selector.n_features_}')
             X_test_f = selector.transform(X_test)
-        case {'selector': 'mongan'}:
-            X_train_f = X_train[:, mongan_prots_idx]
-            X_test_f = X_test[:, mongan_prots_idx]
+        case {'selector': 'mongan33'}:
+            X_train_f = X_train[:, mongan_prots33_idx]
+            X_test_f = X_test[:, mongan_prots33_idx]
             print(f'No. of features selected = {X_train_f.shape[1]}')
         case {'selector': 'mongan10'}:
             X_train_f = X_train[:, mongan_prots10_idx]
@@ -463,7 +466,7 @@ for i, (train_idx, test_idx) in enumerate(cross_validator.split(X, y)):
         case {'model': 'elasticnet'}:
             model = LogisticRegression(
                 penalty='elasticnet', l1_ratio=0.5,
-                solver='saga', max_iter=5000
+                solver='saga', max_iter=10000
             )
         case {'model': 'logreg'}:
             model = LogisticRegression(
@@ -496,6 +499,7 @@ for i, (train_idx, test_idx) in enumerate(cross_validator.split(X, y)):
             result.labels.extend(y_test.tolist())
     print()
 
+# Nested k-fold cross-validation for feature selection by elasticnet
 result = Result({
     'version': '1a',
     'selector': 'none',
@@ -503,7 +507,6 @@ result = Result({
     'validator': 'nestedkfold',
     'snapshot': {}, 
 })
-# Nested k-fold cross-validation for feature selection by elasticnet
 for i, (train_out_idx, test_out_idx) in enumerate(
     cross_validators['kfold'].split(X, y)
 ):
@@ -540,12 +543,13 @@ for i, (train_out_idx, test_out_idx) in enumerate(
     result.inner_folds.append(inner_fold)
     # Average coefficients from models in the internal folds
     coefficients = np.vstack(model_coefficients)
+    result.coefficients.append(coefficients)
     mean_coef = pd.DataFrame({
-        'Coefficient': coefficients.mean(axis=0),
-        'Dropped': np.sum(coefficients == 0, axis=0),
+        'coefficient': coefficients.mean(axis=0),
+        'dropped': np.sum(coefficients == 0, axis=0),
     }, index=lyriks.columns)
-    result.coefficients.append(mean_coef)
-    prots = mean_coef.Coefficient.abs().nlargest(10).index
+    # filter for coefficients that are all non-zero before taking top 10 magnitude
+    prots = mean_coef.coefficient[mean_coef.dropped == 0].abs().nlargest(10).index
     X_train_out_f, X_test_out_f = X_train_out[prots], X_test_out[prots] 
     model.fit(X_train_out_f, y_train_out)
     y_pred = model.predict(X_test_out_f)
@@ -556,23 +560,25 @@ for i, (train_out_idx, test_out_idx) in enumerate(
 
 
 result.metadata['snapshot'].update({
-    # 'selector': repr(selector),
     'model': repr(model),
-    # 'validator': repr(cross_validator),
-    'validator': [
-        repr(cross_validators['kfold']),
-        repr(cross_validators['kfold'])
-    ]
+    'validator': repr(cross_validator),
+    # 'validator': [
+    #     repr(cross_validators['kfold']),
+    #     repr(cross_validators['inner_kfold'])
+    # ]
 })
 print(result.metadata)
 
 ##### Feature selection ##### 
 
-# Mongan et al.
+# Mongan et al. (m = 33)
 result.features = mongan_prots_astral
+print(result.features)
 len(result.features)
 
+# Mongan et al. (m = 10)
 result.features = mongan_prots10
+print(result.features)
 len(result.features)
 
 # BH correction
@@ -586,10 +592,28 @@ q_fil = avg_q[avg_q.q < 0.05]
 result.features = q_fil.index.tolist()
 len(result.features)
 
+# BH correction and ANCOVA coefficients
+qvals = np.array([
+    multipletests(p, alpha=0.05, method='fdr_bh')[1]
+    for p in result.pvals
+])
+ancova_coefs  = np.array(result.test_statistics)
+stats = pd.DataFrame({
+    'coefficient': ancova_coefs.mean(axis=0),
+    'q': qvals.mean(axis=0),
+}, index=X.columns)
+stats_f = stats[stats.q < 0.05]
+stats_fs = stats_f.sort_values(by='q')
+result.features = stats_fs.index.tolist()
+len(result.features)
+
+filepath = 'tmp/astral/lyriks402/1a-prognostic_ancova-kfold.csv'
+stats_fs.to_csv(filepath)
+
 # No BH correction
 pvals = np.array(result.pvals)
 avg_p = pd.DataFrame({'p': pvals.mean(axis=0)}, index=X.columns)
-p_fil = avg_p[avg_p.p < 0.05]
+p_fil = avg_p[avg_p.p < 0.01]
 result.features = p_fil.index.tolist()
 len(result.features)
 # np.unique(np.sum(pvals < 0.05, axis=0), return_counts=True) 
@@ -602,6 +626,13 @@ rank_fil = avg_rank[avg_rank.Rank <= 2]
 result.features = rank_fil.index.tolist()
 len(result.features)
 
+filepath = 'tmp/astral/lyriks402/1a-boruta.csv'
+rank_fil.to_csv(filepath)
+
+# No feature selection
+result.features = X.columns
+len(result.features)
+
 # Logistic regression (elastic) - coefficients
 coefficients = np.vstack(result.coefficients)
 coeff = pd.DataFrame({
@@ -610,30 +641,22 @@ coeff = pd.DataFrame({
 }, index=lyriks.columns)
 result.features = coeff.Coefficient.abs().nlargest(10).index
 coeff.loc[result.features]
-
 plt.hist(coeff.loc[coeff.Dropped == 0, 'Coefficient'], bins=30)
 plt.show()
 
-# ElasticNet
-
+# ElasticNet (nested k-fold)
 # Double check using grand mean
-all_mean_coefs = pd.concat(result.coefficients, axis=1)
-grandmean_coefs = all_mean_coefs.iloc[:, range(0, 8, 2)].mean(axis=1)
-result.features = grandmean_coefs.abs().nlargest(10).index.tolist()
 
-# # Proteins that appeared >1 in all 4 folds
-# prots_freq = pd.concat(all_prots).value_counts()
-# print(len(prots_freq))
-# prots_freq[prots_freq > 1]
-# result.features = prots_freq.index[prots_freq > 1].tolist()
+# Filter for proteins that have always been selected
+# Take the top 10 proteins with highest coefficient magnitude
+coefs = pd.DataFrame(np.vstack(result.coefficients).T, index=X.columns)
+coefs_never_dropped = coefs.loc[np.sum(coefs == 0, axis=1) == 0, :]
+mean_coefs = coefs_never_dropped.mean(axis=1)
+result.features = mean_coefs.abs().nlargest(10).index.tolist()
+len(result.features)
 
-# Check saved run 
-coefficients = np.vstack(result_none.coefficients)
-coeff = pd.DataFrame({
-    'Coefficient': coefficients.mean(axis=0),
-    'Dropped': np.sum(coefficients == 0, axis=0),
-}, index=lyriks.columns)
-prots_elastic_30 = coeff.Coefficient.abs().nlargest(30).index
+filepath = 'tmp/astral/lyriks402/elasticnet-nestedkfold.csv'
+coefs.loc[result.features].mean(axis=1).to_csv(filepath)
 
 ##### Save results #####
 
@@ -644,13 +667,13 @@ name = (
     f'{result.metadata["model"]}-'
     f'{result.metadata["validator"]}'
 )
-
-filename = 'tmp/astral/' + name + '.pkl'
+filename = 'tmp/astral/lyriks402/' + name + '.pkl'
 print(filename)
 with open(filename, 'wb') as file:
     pickle.dump(result, file)
 
-# Load
+##### Load results #####
+
 filename = 'tmp/astral/1a-mongan-elasticnet-kfold.pkl'
 with open(filename, 'rb') as file:
     result_mongan = pickle.load(file)
@@ -667,7 +690,7 @@ filename = 'tmp/astral/1a-none-elasticnet-kfold.pkl'
 with open(filename, 'rb') as file:
     result_elasticnet = pickle.load(file)
 
-filename = 'tmp/astral/1a-boruta-elasticnet-kfold.pkl'
+filename = 'tmp/astral/lyriks402/1a-boruta-elasticnet-kfold.pkl'
 with open(filename, 'rb') as file:
     result_boruta = pickle.load(file)
 
@@ -675,13 +698,7 @@ filename = 'tmp/astral/2b-prognostic_ancova-elasticnet-kfold.pkl'
 with open(filename, 'rb') as file:
     result_remission = pickle.load(file)
 
-len(result_boruta.features)
-
-result_remission.metadata
-
 ##### Evaluation ##### 
-
-result = result_elasticnet
 
 # Threshold = 0.5
 tn, fp, fn, tp = confusion_matrix(result.labels, result.predictions).ravel()
@@ -705,13 +722,12 @@ print(metric_repr)
 # Plot ROC curve
 fpr, tpr, thresholds = roc_curve(result.labels, result.probas)
 plt.figure(figsize=(4.5, 4))
-plt.plot(fpr, tpr, label=f'ROC curve (AUC = {auc:.2f})')
+plt.plot(fpr, tpr, label=f'AUC = {auc:.2f}')
 plt.plot([0, 1], [0, 1], linestyle='--', color='gray')
-plt.xlabel('False Positive Rate (FPR)')
-plt.ylabel('True Positive Rate (TPR)')
-plt.title('ROC curve')
+plt.xlabel('1 - Specificity')
+plt.ylabel('Sensitivity')
 plt.legend()
-filepath = 'tmp/astral/fig/roc-' + name + '.pdf'
+filepath = 'tmp/astral/lyriks402/fig/roc-' + name + '.pdf'
 print(filepath)
 plt.savefig(filepath)
 plt.close()
@@ -988,10 +1004,39 @@ sns.scatterplot(data=X_y, x='PC1', y='PC3', hue='final_label', ax=ax2)
 filepath = 'tmp/astral/fig/pca-1a-59x33.pdf'
 plt.savefig(filepath)
 
+##### Annotate #####
+
+# Annotate with gene symbols
+filepath = 'tmp/astral/lyriks402/1a-prognostic_ancova.csv'
+stats = pd.read_csv(filepath, index_col=0)
+
+symbols = reprocessed.loc[stats.index, ['Description', 'Gene']]
+data = symbols.join(stats)
+data.sort_values(by='q', inplace=True)
+
+writepath = 'tmp/astral/lyriks402/annotated-1a-prognostic_ancova.csv'
+data.to_csv(writepath, float_format='%.3g')
+
+
 ##### Features #####
+
+filepath = 'tmp/astral/lyriks402/elasticnet-nestedkfold.csv'
+elasticnet = pd.read_csv(filepath, index_col=0)
+
+filepath = 'tmp/astral/lyriks402/1a-boruta.csv'
+boruta = pd.read_csv(filepath, index_col=0)
 
 # Write gene descriptions of signatures  
 symbols = reprocessed.loc[lyriks.columns, ['Description', 'Gene']]
+
+symbols_f = symbols.loc[elasticnet.index]
+data = symbols_f.join(elasticnet)
+data.sort_values(by='mean_coefficient', key=abs, ascending=False, inplace=True)
+
+writepath = 'tmp/astral/lyriks402/biomarkers-elasticnet-nestedkfold.csv'
+data.to_csv(writepath, float_format='%.3g')
+
+# 4 signatures
 filepaths = [
     'tmp/astral/lyriks402/1a-prognostic_ancova.csv',
     'tmp/astral/lyriks402/1a-psychotic_ttest.csv',
@@ -1007,6 +1052,7 @@ for filepath in filepaths:
     writepath = filepath[:21] + 'signatures-' + filepath[21:]
     print(writepath)
     data.to_csv(writepath, float_format='%.3g')
+
 
 # BH correction
 result = result_prognostic_ancova
@@ -1059,11 +1105,37 @@ print(filepath)
 
 ##### Venn #####
 
-# Mongan
+filepath = 'tmp/astral/lyriks402/elasticnet-nestedkfold.csv'
+elasticnet = pd.read_csv(filepath, index_col=0)
+prots_enet = elasticnet.index
 
+filepath = 'tmp/astral/lyriks402/1a-prognostic_ancova-kfold.csv'
+data = pd.read_csv(filepath, index_col=0)
+prots_ancova = data.index
+
+filepath = 'tmp/astral/lyriks402/1a-prognostic_ancova.csv'
+data = pd.read_csv(filepath, index_col=0)
+signature_psychosis_prognostic = data[data.p < 0.01].index
+len(signature_psychosis_prognostic)
+
+filepath = 'tmp/astral/lyriks402/1a-boruta.csv'
+data = pd.read_csv(filepath, index_col=0)
+prots_boruta = data.index
+
+# Mongan
 filepath = 'data/astral/etc/mongan-etable5.csv'
 mongan = pd.read_csv(filepath, index_col=0, header=0)
-mongan_prots = mongan.index[mongan.q < 0.05]
+prots_mongan35 = mongan.index[mongan.q < 0.05]
+
+prots_mongan10 = pd.Series([
+    'P01023', 'P01871', 'P04003', 'P07225', 'P23142',
+    'P02766', 'Q96PD5', 'P02774', 'P10909', 'P13671'
+])
+len(mongan_prots35)
+
+filepath = 'data/astral/etc/perkins.csv'
+perkins = pd.read_csv(filepath, index_col=0)
+prots_perkins = perkins['UniProt/CAS'][perkins['UniProt/CAS'].str.startswith(('P', 'Q'))]
 
 filename = 'tmp/astral/lyriks402/signatures-1a-prognostic_ancova.csv'
 prognostic_1a = pd.read_csv(filename, index_col=0, header=0)
@@ -1097,7 +1169,17 @@ p_fil = avg_p[avg_p.p < 0.05]
 prots_progp = p_fil.index.tolist()
 len(prots_progp)
 
-# Biomarkers
+# Feature selection method
+proteins = {
+    'ANCOVA (k-fold cross-validation)': set(prots_ancova),
+    'Elastic Net (nested k-fold cross-validation)': set(prots_enet),
+    'Boruta (k-fold cross-validation)': set(prots_boruta),
+}
+venn(proteins)
+filename = 'tmp/astral/lyriks402/fig/venn3-feature_selection.pdf'
+plt.savefig(filename)
+
+# Signatures
 proteins = {
     'Psychosis prognostic signature': set(prots_prognostic_1a),
     'Psychosis conversion signature': set(prots_psychotic_1a),
@@ -1108,28 +1190,27 @@ venn(proteins)
 filename = 'tmp/astral/fig/venn4-signatures.pdf'
 plt.savefig(filename)
 
+
+# Perkins, Mongan (10)
+proteins = {
+    'ANCOVA (k-fold cross-validation)': set(prots_ancova),
+    'Elastic Net (nested k-fold cross-validation)': set(prots_enet),
+    'Mongan et al. (2020)': set(prots_mongan35),
+    'Perkins et al. (2015)': set(prots_perkins),
+}
+venn(proteins)
+filename = 'tmp/astral/lyriks402/fig/venn4-literature35.pdf'
+plt.savefig(filename)
+
 # Analysing intersections
 set(prots_prognostic_1a).intersection(set(prots_psychotic_1a))
 set(prots_uhr_3a).intersection(set(prots_prognostic_2b))
 
+set(prots_mongan35).intersection(set(prots_ancova).union(set(prots_enet)))
+a = set(prots_ancova).union(set(prots_enet)) - set(prots_mongan35)
+a
 
-# Perkins, Mongan (35), Prognostic, Psychotic
-filepath = 'data/astral/etc/perkins.csv'
-perkins = pd.read_csv(filepath, header=0)
-perkins_prots = perkins[perkins.iloc[:, 1].str.startswith(('P', 'Q'))].iloc[:, 1]
-perkins
-perkins_prots
-
-proteins = {
-    'ANCOVA (4-fold cross validation)': set(result_prognostic_ancova.features),
-    'ANCOVA (entire data set)': set(prots_1a_q),
-    'Elastic Net (top 10)': set(result_elasticnet.features),
-    'Boruta': set(result_boruta.features),
-}
-venn(proteins)
-filename = 'tmp/astral/fig/venn4-feats-ancovakfold_ancovaentire_elasticnet_boruta.pdf'
-plt.savefig(filename)
-
+# intersection(set(prots_enet))
 
 ##### P-value #####
 
@@ -1145,11 +1226,9 @@ def compute_p(n, a, b):
 n = lyriks.shape[1]
 compute_p(607, 10, 12)
 
-
 ##### Grid search #####   
 param_grid = {
     'C': [0.1, 1, 10],
     'kernel': ['linear', 'rbf'],
     'gamma': ['scale', 'auto']
 }
-
