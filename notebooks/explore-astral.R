@@ -2,6 +2,8 @@ library(dplyr)
 library(impute)
 library(tidyr)
 library(ggplot2)
+library(pheatmap)
+library(RColorBrewer)
 library(sva)
 # library(umap)
 library(viridis)
@@ -497,20 +499,26 @@ metadata_lyriks %>%
 
 ##### Imputation #####
 
-# Remove remit (not early or late), relapse and QC patients
+# Remove QC sampels
 identical(rownames(metadata_lyriks), colnames(lyriks))
 idx <- subset(
   metadata_lyriks,
   label != 'QC' 
-  # !(label %in% c('remit', 'relapse', 'QC'))
+  # !(label %in% c('remit', 'relapse', 'QC')) # remove remit (not early or late), relapse patients
 ) %>%
   rownames()
 
 slyriks <- lyriks[, idx]
 metadata_slyriks <- metadata_lyriks[idx, ]
-
 colnames(metadata_lyriks)
 unique(metadata_lyriks$label)
+
+pct_present <- apply(slyriks, 1, function(x) sum(!is.na(x)) / ncol(slyriks))
+PCT_THRESHOLD <- 0.8
+prots_sel <- names(pct_present)[pct_present > PCT_THRESHOLD]
+# writeLines(prots_sel, 'tmp/astral/prots-slyriks_lt80.txt')
+length(prots_sel)
+# slyriks[prots_sel, ]
 
 # file <- 'data/astral/processed/metadata-lyriks.csv'
 # write.csv(metadata_slyriks, file)
@@ -759,8 +767,52 @@ feats <- sample(rownames(combat_lyriks), 40)
 
 ##### Save data ##### 
 
-file <- 'data/astral/processed/combat_knn5_lyriks.csv'
-write.csv(combat_lyriks, file)
+# file <- 'data/astral/processed/combat_knn5_lyriks-605_402.csv'
+# write.csv(combat_lyriks, file)
+
+##### Heatmap #####
+
+file <- 'data/astral/processed/combat_knn5_lyriks-605_402.csv'
+lyriks <- read.csv(file, row.names = 1)
+lyriks[1:20, 1:5]
+
+# Baseline samples of UHR
+file <- 'data/astral/processed/metadata-lyriks407.csv'
+md <- read.csv(file, row.names = 1)
+md <- md[md$label != 'QC', ]
+md$period <- as.numeric(md$period)
+
+# Model 1A: cvt (M0) v.s. non-cvt (M0)
+# Only M0 and exclude ctrl samples
+md_1a <- subset(md, final_label != 'ctrl' & period == 0)
+md_annot <- md_1a[, 'final_label', drop = FALSE]
+md_annot$final_label <- ifelse(md_annot$final_label == 'cvt', 'cvt', 'non-cvt')
+
+lyriks_m0_zero <- lnmatrix[, rownames(md_annot)]
+lyriks_m0_zero[is.na(lyriks_m0_zero)] <- 0
+dim(lyriks_m0_zero)
+
+# Mongan proteins
+file <- 'data/astral/etc/mongan-etable5.csv'
+mongan <- read.csv(file, row.names = 1)
+
+mongan_166 <- rownames(mongan)
+mongan_163 <- mongan_166[mongan_166 %in% rownames(lyriks_m0_zero)]
+mongan_35 <- rownames(mongan)[mongan$q < 0.05]
+mongan_34 <- mongan_35[mongan_35 %in% rownames(lyriks_m0_zero)]
+
+# ANCOVA (q < .05)
+file <- 'tmp/astral/lyriks402/biomarkers/biomarkers-ancova.csv'
+bm_ancova <- read.csv(file, row.names = 1)
+
+pheatmap(
+  lyriks[rownames(bm_ancova), rownames(md_annot)],
+  color = colorRampPalette(brewer.pal(9, "Blues"))(100),
+  annotation_col = md_annot, 
+  filename = "tmp/astral/lyriks402/fig/heatmap_combat-ancova_15.pdf",
+  width = 18,
+  height = 15
+)
 
 ##### Plot: Feature #####
 
