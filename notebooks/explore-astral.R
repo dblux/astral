@@ -15,6 +15,12 @@ source('R/utils.R')
 theme_set(theme_bw(base_size = 7))
 
 
+# Peptide matrix
+file <- 'data/astral/raw/report.pr_matrix.tsv'
+pr_matrix <- read.table(file, sep = '\t', header = T)
+pr_matrix[16888:16902, 1:10]
+dim(pr_matrix)
+
 file <- 'data/astral/raw/all_sample.csv'
 processed <- read.csv(file, row.names = 1)
 uniprot_annot <- processed[, 1:2]

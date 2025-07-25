@@ -12,7 +12,7 @@ from boruta import BorutaPy
 from dataclasses import dataclass, field
 from scipy.stats import f, ttest_ind, ttest_rel, rankdata
 from sklearn.decomposition import PCA
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestClassifier, IsolationForest
 from sklearn.feature_selection import SelectFdr, f_classif
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import LeaveOneOut, StratifiedKFold
@@ -69,6 +69,7 @@ raw = pd.read_csv(filepath, sep='\t', index_col=0, header=0)
 
 filepath = 'data/astral/raw/reprocessed-data.csv'
 reprocessed = pd.read_csv(filepath, index_col=0, header=0)
+
 
 # Model 1A: cvt (M0) v.s. non-cvt (M0)
 # Prognostic markers
