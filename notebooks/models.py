@@ -814,11 +814,11 @@ print(filename)
 ##### Load results #####
 
 # ANCOVA (balanced)
-filename = 'tmp/astral/lyriks402/new/1a-prognostic_ancova-elasticnet-bal-kfold.pkl'
+filename = 'tmp/astral/lyriks402/new/pickle/1a-prognostic_ancova-elasticnet-bal-kfold.pkl'
 with open(filename, 'rb') as file:
     result_ancova_bal = pickle.load(file)
 
-filename = 'tmp/astral/lyriks402/new/1a-none-elasticnet-bal-nestedkfold.pkl'
+filename = 'tmp/astral/lyriks402/new/pickle/1a-elasticnet-elasticnet-bal-nestedkfold.pkl'
 with open(filename, 'rb') as file:
     result_enet_bal = pickle.load(file)
 
@@ -848,7 +848,7 @@ with open(filename, 'rb') as file:
     result_remission = pickle.load(file)
 
 # e1A
-filename = 'tmp/astral/lyriks402/1a-prognostic_ancova-svm_linear-kfold.pkl'
+filename = 'tmp/astral/lyriks402/new/pickle/1a-svm-linear-svm-linear-nestedkfold.pkl'
 with open(filename, 'rb') as file:
     result_svm = pickle.load(file)
 
@@ -871,6 +871,21 @@ with open(filename, 'rb') as file:
 filename = 'tmp/astral/lyriks402/2b-none-elasticnet-kfold.pkl'
 with open(filename, 'rb') as file:
     result_remission_605 = pickle.load(file)
+
+
+dir(result_ancova_bal.features)
+result_ancova_bal.metadata
+result_enet_bal.metadata
+result_svm.metadata
+
+bm1 = set(result_ancova_bal.features)
+bm2 = set(result_enet_bal.features)
+bm3 = set(result_svm.features)
+bm1 & bm2 & bm3
+bm1 & bm2
+bm1 & bm3
+bm2 & bm3
+
 
 
 ##### Evaluation ##### 

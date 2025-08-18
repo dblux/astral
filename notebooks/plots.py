@@ -9,7 +9,7 @@ import scanpy as sc
 import statsmodels.api as sm
 
 from dataclasses import dataclass, field
-from scipy.stats import f, ttest_ind, ttest_rel, rankdata
+from scipy.stats import f, ttest_ind, ttest_rel, rankdata, norm
 from sklearn.decomposition import PCA
 from sklearn.metrics import (
     accuracy_score, confusion_matrix, roc_curve, roc_auc_score
@@ -128,18 +128,33 @@ def plot_clusters(adata, cov_estimator):
 file = 'data/astral/processed/combat_knn5_lyriks-605_402.csv'
 lyriks = pd.read_csv(file, index_col=0, header=0).T
 
+# Contains gene symbol annotation
+filepath = 'data/astral/raw/reprocessed-data.csv'
+reprocessed = pd.read_csv(filepath, index_col=0, header=0)
+
+# Replace UniProt IDs with gene symbols
+lyriks_symbol = lyriks.copy()
+uniprot_symbol = reprocessed.loc[lyriks.columns, 'Gene']
+# Remove proteins that do not map to gene symbols
+lyriks_symbol = lyriks_symbol.loc[:, ~uniprot_symbol.isna()]
+# Map UniProt IDs to gene symbols using replace
+lyriks_symbol.columns = lyriks_symbol.columns.map(uniprot_symbol)
+# uid = 'Q9Y6R7'
+# uniprot_symbol[uid]
+# lyriks[uid]
+# lyriks_symbol[uniprot_symbol[uid]]
+
+
 file = 'data/astral/processed/metadata-lyriks407.csv'
 md = pd.read_csv(file, index_col=0, header=0)
 md = md[md.label != 'QC']
 md['period'] = md['period'].astype(int)
+
 # Model 1A: cvt (M0) v.s. non-cvt (M0)
 # Prognostic markers
 # Only M0 and exclude ctrl samples
-md_1a = md[(md.final_label != 'ctrl') & (md.period == 0)]
+md_1a = md[(md.final_label != 'ctrl') & (md.period == 0)].copy()
 lyriks_1a = lyriks.loc[md_1a.index]
-X = lyriks_1a
-X.shape
-md_1a.shape
 
 ### Mongan et al.
 # P02489 is not in reprocessed data (not detected)
@@ -171,7 +186,158 @@ md_1a.Label = md_1a.Label.replace({
     'mnt': 'Non-convert',
     'cvt': 'Convert'
 })
-data = ad.AnnData(X, md_1a)
+
+
+# TODO: Explore association with time samples were taken
+
+### Protein families ###
+
+# Some gene symbols are duplicated
+apo_genes = lyriks_symbol.columns[
+    lyriks_symbol.columns.str.startswith('APO', na=False)]
+serpin_genes = lyriks_symbol.columns[
+    lyriks_symbol.columns.str.startswith('SERPIN', na=False)]
+itih_genes = lyriks_symbol.columns[
+    lyriks_symbol.columns.str.startswith('ITIH', na=False) | 
+    lyriks_symbol.columns.isin(['AMBP', 'SPINT2'])
+]
+znf_genes = lyriks_symbol.columns[
+    lyriks_symbol.columns.str.startswith('ZNF', na=False)]
+
+complement_proteins = reprocessed.loc[
+    reprocessed.Description.str.startswith('Complement', na=False)]
+complement_genes = complement_proteins.Gene
+complement_genes = complement_genes[complement_genes.isin(lyriks_symbol.columns)]
+coagulation_proteins = reprocessed.loc[
+    reprocessed.Description.str.startswith('Coagulation', na=False)]
+coagulation_genes = coagulation_proteins.Gene
+coagulation_genes = coagulation_genes[coagulation_genes.isin(lyriks_symbol.columns)]
+print(complement_genes)
+print(coagulation_genes)
+
+astral_itih = ['ITIH1', 'ITIH3', 'ITIH4']
+mongan_itih = {'ITIH1': "'", 'ITIH3': '"'}
+astral_apo = ['APOB']
+mongan_apo = {'APOH': "'", 'APOE':  "'"}
+astral_znf = ['ZNF607']
+mongan_znf = {}
+astral_serpin = ['SERPIND1', 'SERPINA4']
+mongan_serpin = {'SERPIND1': '"', 'SERPING1': "'"}
+astral_complement = ['C1R', 'C1S']
+mongan_complement = {
+    'C1R': "'", 'C8A': '"', 'C1QC': "'",
+    'CFI': "'", 'CFH': "'", 'CFB': "'",
+}
+astral_coagulation = ['F9']
+mongan_coagulation = {'F11': "'"}
+
+# Immunoglobulins and interleukins are too generic
+# ig_proteins = reprocessed.loc[
+#     reprocessed.Description.str.startswith('Immunoglobulin', na=False)]
+# ig_genes = ig_proteins.Gene
+
+family = 'coagulation'
+genes = coagulation_genes
+astral_set = astral_coagulation
+mongan_set = mongan_coagulation
+
+lyriks_family = lyriks_symbol.loc[md_1a.index, genes]
+lyriks_family = lyriks_family.assign(sample_id=lyriks_family.index)
+lyriks_family = lyriks_family.join(md_1a[['Label', 'age', 'gender']], how='left')
+lyriks_family_long = lyriks_family.melt(
+    id_vars=['sample_id', 'Label', 'age', 'gender'],
+    var_name='Gene', value_name='Expression value'
+)
+
+# Order by ANCOVA pvalue
+pvalues = []
+for gene in genes:
+    print(gene)
+    model = ols(
+        f'{gene} ~ Label + age + gender',
+        data=lyriks_family
+    ).fit()
+    pvalues.append(model.pvalues[1])
+
+# Observe whether q-values are still significant after correction
+_, qvalues, _, _ = multipletests(pvalues, alpha=0.05, method='fdr_bh')
+sig = pd.DataFrame(
+    {'p': pvalues, 'q': qvalues},
+    index=genes
+).sort_values(by='q', ascending=True)
+# filepath = f'tmp/astral/lyriks402/fig/families/{family}-qvalues.csv'
+# sig.to_csv(filepath)
+
+# Order genes according to q-values
+lyriks_family_long['Gene'] = pd.Categorical(
+    lyriks_family_long['Gene'],
+    categories=sig.index,
+    ordered=True
+)
+print(len(genes))
+
+fig, axes = plt.subplots(2, 4, figsize=(12, 6))
+axes = axes.flatten()
+for i, gene in enumerate(sig.index):
+    print(gene)
+    sns.stripplot(
+        data=lyriks_family_long[lyriks_family_long['Gene'] == gene],
+        x='Label', y='Expression value', hue='Label',
+        ax=axes[i], jitter=True, legend=False,
+        order=['Non-convert', 'Convert']
+    )
+    # Determine title
+    title = gene
+    if gene in astral_set:
+        title += '*'
+    if gene in mongan_set:
+        title += mongan_set[gene]
+    title = f'{title} (p = {sig.loc[gene, "p"]:.3f})'
+    axes[i].set_title(title)
+    axes[i].set_xlabel('')
+
+for j in range(len(genes), len(axes)):
+    fig.delaxes(axes[j])  # Remove empty subplot
+
+plt.tight_layout()
+filepath = f'tmp/astral/lyriks402/fig/families/{family}-jitter1.pdf'
+plt.show()
+
+plt.savefig(filepath)
+
+
+g = sns.FacetGrid(
+    data=lyriks_family_long, col='Gene', hue='Label',
+    height=2.5, aspect=0.7, col_wrap=8, sharex=True, sharey=False
+)
+g.map(sns.stripplot, 'Label', 'Expression value', order=None)
+g.set_titles(col_template="{col_name}", row_template="{row_name}")
+g.set_axis_labels('')
+for ax in g.axes.flat:
+    ax.tick_params(axis='x', labelrotation=30)
+
+filepath = f'tmp/astral/lyriks402/fig/families/{family}-jitter.pdf'
+
+plt.savefig(filepath, bbox_inches='tight')
+plt.close()
+
+# TODO: Plot with specified order and titles
+
+
+# view sample metadata
+sc.pl.violin(data, keys=, groupby='Label', rotation=45)
+
+lyriks_1a = lyriks.loc[md_1a.index]
+X = lyriks_1a
+X.shape
+md_1a.shape
+
+
+# TODO: Plot apolipoproteins (plot baseline comparisons)
+# TODO: Plot apolipoproteins (plot progression through time?)
+# TODO: Double check for proteins that were supposedly depleted
+
+reprocessed.loc[reprocessed.Gene.str.startswith('APO', na=False)]
 
 data_mongan33 = data[:, mongan_prots33]
 data_elasticnet = data[:, bm_enet]
@@ -194,6 +360,10 @@ fig.savefig(filename, bbox_inches='tight')
 sc.pp.pca(data_elasticnet)
 fig = plot_clusters(data_elasticnet, mle_cov)
 fig.set_size_inches(3, 2)
+plt.legend(
+    loc='upper center', bbox_to_anchor=(0.5, -0.1),
+    frameon=False, ncol=2
+)
 filename = 'tmp/astral/lyriks402/fig/pca-elasticnet.pdf'
 fig.savefig(filename, bbox_inches='tight')
 
@@ -395,8 +565,6 @@ dirpath = 'tmp/astral/lyriks402/new/pickle/random15'
 filepaths = os.listdir(dirpath)
 filepaths = [os.path.join(dirpath, filepath) for filepath in filepaths]
 filepaths = sorted(filepaths)
-
-
 mean_aucs = []
 for filepath in filepaths:
     with open(filepath, 'rb') as file:
@@ -447,7 +615,6 @@ model_bal_aucs = model_aucs[model_aucs['class_weight'] == 'balanced']
 aucs1 = model_bal_aucs[
     model_bal_aucs['selector'].isin(['mongan10', 'mongan33'])
 ]
-aucs1
 aucs1.index = [
     'EU-GEI (ANCOVA)',
     'EU-GEI (SVM)',
@@ -459,8 +626,8 @@ ax.barh(
     capsize=5, color='gray'
 )
 ax.set_xlabel('AUC')
-plt.axvline(x=0.99, color='tab:cyan', linestyle='dashed') # train set
-plt.axvline(x=0.92, color='tab:red', linestyle='dashed') # test set
+# plt.axvline(x=0.99, color='tab:cyan', linestyle='dashed') # train set
+# plt.axvline(x=0.92, color='tab:red', linestyle='dashed') # test set
 plt.xlim(0.5, 1.05)
 plt.tight_layout()
 filepath = 'tmp/astral/lyriks402/fig/barh-auc1.pdf'
@@ -468,53 +635,66 @@ plt.savefig(filepath)
 
 # AUC2
 aucs2 = model_bal_aucs.iloc[[0, 1, 3], :]
+aucs2.loc[len(aucs2)] = {
+    'selector': 'random',
+    'class_weight': 'balanced',
+    'model': 'elasticnet-bal',
+    'mean_auc': rnd_mean_auc,
+    'std_auc': rnd_std_auc
+}
 print(aucs2)
+
 aucs2.index = [
     'LYRIKS (elastic net)',
     'LYRIKS (ANCOVA)',
     'LYRIKS (SVM)',
+    'LYRIKS (random)',
 ]
-eugei_svm_mean_auc = aucs1.iloc[1, 3]
 
-fig, ax = plt.subplots(1, 1, figsize=(4.6, 1.8))
+fig, ax = plt.subplots(1, 1, figsize=(4.6, 2.4))
 ax.barh(
     aucs2.index, aucs2['mean_auc'], xerr=aucs2['std_auc'],
     capsize=5, color='gray'
 )
 ax.set_xlabel('AUC')
-plt.axvline(x=eugei_svm_mean_auc, color='tab:green', linestyle='dashed') # EU-GEI (SVM)
-plt.axvline(x=rnd_mean_auc, color='tab:purple', linestyle='dashed') # negative ctrl
 plt.xlim(0.5, 1.05)
+plt.gca().invert_yaxis()
 plt.tight_layout()
 filepath = 'tmp/astral/lyriks402/fig/barh-auc2.pdf'
 plt.savefig(filepath)
 
-# Perform t-test between models
-data_bal = data[data['class_weight'] == 'balanced']
+# Calculate p-values for AUCs (p = 1 - F(x))
+p = 1 - norm.cdf(aucs2.mean_auc, loc=rnd_mean_auc, scale=rnd_std_auc)
+p[3] = np.nan 
+aucs2['p'] = p
+print(aucs2)
 
-tstat, pval = ttest_ind(
-    data_bal.loc[data['selector'] == 'mongan33', 'auc'].values,
-    data_bal.loc[data['selector'] == 'prognostic_ancova', 'auc'].values
-)
-print(tstat, pval)
-
-tstat, pval = ttest_ind(
-    data_bal.loc[data['selector'] == 'mongan33', 'auc'].values,
-    data_bal.loc[data['selector'] == 'none', 'auc'].values
-)
-print(tstat, pval)
-
-ttest_rel(
-    data_bal.loc[data['selector'] == 'mongan33', 'auc'].values,
-    data_bal.loc[data['selector'] == 'prognostic_ancova', 'auc'].values
-)
-
-ttest_rel(
-    data_bal.loc[data['selector'] == 'mongan33', 'auc'].values,
-    data_bal.loc[data['selector'] == 'none', 'auc'].values
-)
-
-print(tstat, pval)
+# # Perform t-test between models
+# data_bal = data[data['class_weight'] == 'balanced']
+# 
+# tstat, pval = ttest_ind(
+#     data_bal.loc[data['selector'] == 'mongan33', 'auc'].values,
+#     data_bal.loc[data['selector'] == 'prognostic_ancova', 'auc'].values
+# )
+# print(tstat, pval)
+# 
+# tstat, pval = ttest_ind(
+#     data_bal.loc[data['selector'] == 'mongan33', 'auc'].values,
+#     data_bal.loc[data['selector'] == 'none', 'auc'].values
+# )
+# print(tstat, pval)
+# 
+# ttest_rel(
+#     data_bal.loc[data['selector'] == 'mongan33', 'auc'].values,
+#     data_bal.loc[data['selector'] == 'prognostic_ancova', 'auc'].values
+# )
+# 
+# ttest_rel(
+#     data_bal.loc[data['selector'] == 'mongan33', 'auc'].values,
+#     data_bal.loc[data['selector'] == 'none', 'auc'].values
+# )
+# print(tstat, pval)
+#
 # paired_ttests = [
 #     ttest_rel(
 #         lyriks.loc[cvt2, prot],
@@ -526,6 +706,9 @@ print(tstat, pval)
 
 
 ##### Venn #####
+
+filepath = 'data/astral/raw/reprocessed-data.csv'
+reprocessed = pd.read_csv(filepath, index_col=0, header=0)
 
 filepath = 'tmp/astral/lyriks402/new/biomarkers/biomarkers-ancova.csv'
 data = pd.read_csv(filepath, index_col=0)
@@ -552,27 +735,8 @@ prots_mongan10 = pd.Series([
 ])
 len(prots_mongan35)
 
-# filepath = 'data/astral/etc/perkins.csv'
-# perkins = pd.read_csv(filepath, index_col=0)
-# prots_perkins = perkins['UniProt/CAS'][
-#     perkins['UniProt/CAS'].str.startswith(('P', 'Q'))
-# ]
-
-# filename = 'tmp/astral/lyriks402/biomarkers/signatures-psychosis_prognostic.csv'
-# data = pd.read_csv(filename, index_col=0, header=0)
-# sig_prognostic = data.index[data.p < 0.01] # q-value
-# 
-# filename = 'tmp/astral/lyriks402/biomarkers/signatures-psychosis_conversion.csv'
-# data = pd.read_csv(filename, index_col=0, header=0)
-# sig_conversion = data.index[data.p < 0.01] # q-value
-# 
-# filename = 'tmp/astral/lyriks402/biomarkers/signatures-remission.csv'
-# data = pd.read_csv(filename, index_col=0, header=0)
-# sig_remission = data.index[data.p < 0.01] # q-value
-# 
-# filename = 'tmp/astral/lyriks402/biomarkers/signatures-uhr.csv'
-# data = pd.read_csv(filename, index_col=0, header=0)
-# sig_uhr = data.index[data.p < 0.01] # q-value
+bm_ancova
+prots_mongan35.columns
 
 # TODO 
 # Mongan protein expression in LYRIKS
@@ -605,22 +769,25 @@ filename = 'tmp/astral/lyriks402/fig/venn3-literature35.pdf'
 plt.savefig(filename)
 
 # Analysing intersections
-prots_u = set(bm_ancova).union(set(bm_enet))
+prots_u = set(bm_ancova).union(set(bm_elasticnet))
 prots_d = prots_u - set(prots_mongan35)
-prots_i1 = set(bm_ancova).intersection(set(bm_enet))
+prots_i1 = set(bm_ancova).intersection(set(bm_elasticnet))
 prots_i2 = prots_u.intersection(set(prots_mongan35))
-
 prots_d1 = set(bm_ancova) - set(prots_mongan35)
 prots_i3 = set(bm_ancova) & set(prots_mongan35)
+all_3 = set(prots_i1) & set(prots_mongan35)
+all_3
 
 
 annot = reprocessed[['Description', 'Gene']]
+annot.loc[list(prots_u)]
 annot.loc[list(prots_d)]
 annot.loc[list(prots_i1)]
 annot.loc[list(prots_i2)]
 
 annot.loc[list(prots_d1)]
 annot.loc[list(prots_i3)]
+annot.loc[list(all_3)]
 
 annot.loc[list(set(prots_mongan35) - {'P02489'})]
 
@@ -656,58 +823,165 @@ filename = 'tmp/astral/lyriks402/fig/venn3-feature_selection.pdf'
 plt.savefig(filename)
 
 
-# proteins = {
-#     'ANCOVA (Q < .05)': set(bm_ancova),
-#     'Mongan et al. biomarkers (k = 35)': set(prots_mongan35),
-#     'Mongan et al. proteins (k = 166)': set(mongan.index),
-# }
-# 
-# # Comparing high abundance proteins
-# with open('tmp/astral/prots-slyriks_lt80.txt', 'r') as file:
-#     prots_lt80 = file.read().splitlines()
-# 
-# proteins = {
-#     'LYRIKS': set(prots_lt80),
-#     'EU-GEI': set(mongan.index),
-# }
-# venn(proteins)
-# filename = 'tmp/astral/lyriks402/fig/venn2-coverage.pdf'
-# plt.savefig(filename)
+##### Pathway enrichment analysis #####
 
+### STRING ###
+## KEGG
+file = 'tmp/astral/lyriks402/new/pathway_enrichment/STRING/wx/enrichment-ancova.tsv'
+string_ancova = pd.read_csv(file, sep='\t', index_col=0)
 
-# fig, ax = plt.subplots(figsize=(7, 7))
-# draw_venn(
-#     petal_labels=generate_petal_labels(proteins.values(), fmt='{size}'),
-#     dataset_labels=proteins.keys(),
-#     hint_hidden=False,
-#     colors = ['skyblue', 'orange'],
-#     # colors=bm_colors[:2] + bm_colors[3:],
-#     figsize=(6, 6), fontsize=15, legend_loc='upper right', ax=ax
+string_ancova['-log10(FDR)'] = -np.log10(string_ancova['false discovery rate']) 
+string_ancova.sort_values(by='-log10(FDR)', ascending=True, inplace=True)
+string_ancova.iloc[:,[0, 6, 8]]
+
+file = 'tmp/astral/lyriks402/new/pathway_enrichment/STRING/mongan/KEGG.tsv'
+string_mongan = pd.read_csv(file, sep='\t', index_col=0)
+string_mongan['-log10(FDR)'] = -np.log10(string_mongan['false discovery rate']) 
+string_mongan.sort_values(by='-log10(FDR)', ascending=True, inplace=True)
+string_mongan.iloc[:,[0, 8]]
+
+fig, (ax1, ax2) = plt.subplots(
+    2, 1, figsize=(6, 3), sharex=True,
+    gridspec_kw={'height_ratios': [1, 5]}
+)
+ax1.barh(
+    string_kegg_ancova['term description'],
+    string_kegg_ancova['-log10(FDR)'],
+    capsize=5, color='gray'
+)
+ax1.set_xlabel('-log10(FDR)')
+ax1.set_title('LYRIKS (ANCOVA)')
+ax2.barh(
+    string_kegg_mongan['term description'],
+    string_kegg_mongan['-log10(FDR)'],
+    capsize=5, color='gray'
+)
+ax2.set_xlabel('-log10(FDR)')
+ax2.set_title('EU-GEI (ANCOVA)')
+plt.tight_layout()
+filepath = 'tmp/astral/lyriks402/fig/barh-string_kegg.pdf'
+plt.savefig(filepath)
+
+## Local network cluster 
+file = 'tmp/astral/lyriks402/new/pathway_enrichment/STRING/wx/enrichment-ancova.tsv'
+string_ancova = pd.read_csv(file, sep='\t', index_col=0)
+string_lcn_ancova = string_ancova.iloc[0]
+
+# string_lcn_ancova.iloc[4, 0] = 'Mixed, incl. COVID-19, thrombosis and anticoagulation, and ITIH C-terminus'
+# string_lcn_ancova.iloc[7, 0] = 'Mixed, incl. ITIH C-terminus and AGP'
+# string_lcn_ancova.iloc[8, 0] = 'TRL particle remodeling, and Spherical HDL particle'
+# string_lcn_ancova['term_id'] = string_lcn_ancova['term description'] + ' (' + string_lcn_ancova.index + ')'
+# string_lcn_ancova['-log10(FDR)'] = -np.log10(string_lcn_ancova['false discovery rate']) 
+# string_lcn_ancova.sort_values(by='-log10(FDR)', ascending=True, inplace=True)
+# string_lcn_ancova.iloc[:,[8,9]]
+
+fig, ax = plt.subplots(1, 1, figsize=(8, 1.2))
+ax.barh(
+    string_lcn_ancova['term description'],
+    string_lcn_ancova['false discovery rate'],
+    capsize=5, color='gray'
+)
+ax.set_xlabel('FDR')
+ax.set_title('LYRIKS (ANCOVA)')
+plt.tight_layout()
+filepath = 'tmp/astral/lyriks402/fig/barh-string_lcn_ancova.pdf'
+plt.savefig(filepath)
+
+# file = 'tmp/astral/lyriks402/new/pathway_enrichment/STRING/mongan/local_network_cluster.tsv'
+# string_lcn_mongan = pd.read_csv(file, sep='\t', index_col=0)
+# string_lcn_mongan.iloc[:,[0,5]]
+# string_lcn_mongan.iloc[1, 0] = 'Mixed, incl. ITIH C-terminus and AGP'
+# string_lcn_mongan.iloc[9, 0] = 'Mixed, incl. COVID-19, thrombosis and anticoagulation, and ITIH C-terminus'
+# string_lcn_mongan['term_id'] = string_lcn_mongan['term description'] + ' (' + string_lcn_mongan.index + ')'
+# string_lcn_mongan['-log10(FDR)'] = -np.log10(string_lcn_mongan['false discovery rate']) 
+# string_lcn_mongan.sort_values(by='-log10(FDR)', ascending=True, inplace=True)
+# string_lcn_mongan.iloc[:,[8,9]]
+# fig, ax = plt.subplots(1, 1, figsize=(10, 5))
+# ax.barh(
+#     string_lcn_mongan['term_id'],
+#     string_lcn_mongan['-log10(FDR)'],
+#     capsize=5, color='gray'
 # )
+# ax.set_xlabel('-log10(FDR)')
+# ax.set_title('EU-GEI (ANCOVA)')
+# plt.tight_layout()
+# filepath = 'tmp/astral/lyriks402/fig/barh-string_lcn_mongan.pdf'
+# plt.savefig(filepath)
 
 
-# # Signatures
-# proteins = {
-#     'Psychosis prognostic signature': set(sig_prognostic),
-#     'Psychosis conversion signature': set(sig_conversion),
-#     'Remission prognostic signature': set(sig_remission),
-#     'UHR signature': set(sig_uhr),
-# }
-# sig_colors = generate_colors(n_colors=4, cmap='plasma', alpha=0.4)
-# 
-# fig, ax = plt.subplots(figsize=(7, 7))
-# draw_venn(
-#     petal_labels=generate_petal_labels(proteins.values(), fmt='{size}'),
-#     dataset_labels=proteins.keys(),
-#     hint_hidden=False,
-#     colors=sig_colors,
-#     figsize=(6, 6), fontsize=15, legend_loc='upper right', ax=ax
-# )
-# for t in ax.texts:
-#     t.set_fontsize(18)
-# 
-# filename = 'tmp/astral/lyriks402/fig/venn4-signatures.pdf'
-# fig.savefig(filename)
+## ClusterProfiler: GSEA
+file = 'tmp/astral/lyriks402/new/pathway_enrichment/clusterprofiler/GSEA-KEGG-ANCOVA.csv'
+gsea_ancova = pd.read_csv(file, index_col=0)
+gsea_ancova.sort_values(by='qvalue', ascending=False, inplace=True)
+gsea_ancova.iloc[:,[0, 6]]
+
+fig, ax = plt.subplots(1, 1, figsize=(8, 5))
+ax.barh(
+    gsea_ancova['Description'],
+    gsea_ancova['qvalue'],
+    capsize=5, color='gray'
+)
+ax.set_xlabel('Q-value')
+ax.set_title('LYRIKS (ANCOVA)')
+plt.tight_layout()
+filepath = 'tmp/astral/lyriks402/fig/barh-gsea_kegg_ancova.pdf'
+plt.savefig(filepath)
+
+
+##### Pathway enrichment analysis #####
+
+filepath = 'data/astral/raw/reprocessed-data.csv'
+reprocessed = pd.read_csv(filepath, index_col=0, header=0)
+reprocessed.shape
+reprocessed.columns
+
+symbol = 'P0DOX2'
+reprocessed.loc[symbol, 'Gene']
+reprocessed[reprocessed.Gene.isna()]
+
+gene_symbols605  = reprocessed.loc[lyriks.columns, 'Gene']
+gene_symbols605.to_csv(
+    'tmp/astral/lyriks402/new/biomarkers/gene_symbols605.csv', header=False
+)
+
+
+# Convert UniProt IDs to gene symbols
+import requests
+from pprint import pprint   
+
+def uniprot_to_symbol(uniprot_id):
+    url = f'https://www.uniprot.org/uniprot/{uniprot_id}.json'
+    response = requests.get(url).json()
+    if response['entryType'] == 'Inactive':
+        print(f'UniProt entry {uniprot_id} is inactive!')
+        switched_id = response['inactiveReason']['mergeDemergeTo'][0]
+        assert isinstance(switched_id, str)
+        return uniprot_to_symbol(switched_id)
+    print(uniprot_id)
+    return response['genes'][0]['geneName']['value']
+
+symbol = 'P0CG06'
+symbol = 'Q9Y490'
+res = uniprot_to_symbol(symbol)
+
+mongan_symbols = mongan.index.map(uniprot_to_symbol)
+mongan.insert(0, 'gene_symbol', mongan_symbols) 
+mongan.head()
+mongan.to_csv('tmp/astral/lyriks402/new/biomarkers/mongan-etable5.csv')
+
+
+# Formatting of enrichR results
+import os
+
+dirpath = 'tmp/astral/lyriks402/new/pathway_enrichment/enrichr/wx'
+filepaths = os.listdir(dirpath)
+filepaths = [os.path.join(dirpath, filepath) for filepath in filepaths]
+
+for filepath in filepaths:
+    data = pd.read_csv(filepath, sep='\t')
+    data['Overlap'] = data['Overlap'].str.replace('/', ' of ')
+    filepath = filepath.replace('.tsv', '.csv')
+    data.to_csv(filepath, index=False)
 
 
 ##### P-value #####
@@ -730,3 +1004,10 @@ param_grid = {
     'kernel': ['linear', 'rbf'],
     'gamma': ['scale', 'auto']
 }
+
+### DELETE ###
+filepath = 'data/astral/metadata/LYRIKS/metadata_73.csv'
+md_73 = pd.read_csv(filepath, index_col=0)
+
+md_73.head()
+md_73.sn.unique().shape
