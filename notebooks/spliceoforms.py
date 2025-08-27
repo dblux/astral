@@ -3,10 +3,8 @@ import requests
 import time
 import pprint
 
-import pandas as pd
 
-
-def get_uniprot_isoforms(uniprot_id):
+def get_isoforms(uniprot_id):
     url = f"https://rest.uniprot.org/uniprotkb/{uniprot_id}.json"
     r = requests.get(url)
     if r.status_code != 200:
@@ -36,10 +34,12 @@ def get_uniprot_isoforms(uniprot_id):
 
 def get_exon_coordinates(uniprot_id, tax_id=None):
     """
-    Retrieves exon genomic coordinates for all splice forms of the given UniProt protein ID.
+    Retrieves exon genomic coordinates for all spliceoforms of the given
+    UniProt protein ID.
     Parameters:
-      - uniprot_id (str): UniProt accession (e.g., 'P12345')
-      - tax_id (str, optional): Taxonomy ID to restrict the search (e.g., '9606' for human)
+      - uniprot_id (str): UniProt accession
+      - tax_id (str, optional): Taxonomy ID to restrict the search
+        (e.g., '9606' for human)
     """
     base_url = "https://www.ebi.ac.uk/proteins/api/coordinates"
     params = {"accession": uniprot_id}
@@ -96,8 +96,8 @@ serpinf2_2_uid = "P08697-2"
 kng1_1_uid = "P01042-1"
 kng1_2_uid = "P01042-2"
 
-result = get_uniprot_isoforms(kng1_1_uid)
-result = get_uniprot_isoforms("P07358")
+result = get_isoforms(kng1_1_uid)
+result = get_isoforms("P07358")
 pprint.pprint(result)
 
 # Retrieve sequence and exon coordinates for ITIH1-1
@@ -125,7 +125,6 @@ with open(filepath, 'w') as f:
     json.dump(result, f, indent=2)
 
 
-# Spliceoforms: Retrieve isoforms and exon coordinates from UniProt
 filepath = 'tmp/astral/lyriks402/biomarkers/biomarkers-ancova.csv'
 bm_ancova = pd.read_csv(filepath, index_col=0)
 
@@ -146,7 +145,7 @@ for uid, gene in zip(bm_ancova.index, bm_ancova.Gene):
         print()
 
 for uid, gene in zip(bm_enet.index, bm_enet.Gene):
-    result = get_uniprot_isoforms(uid)
+    result = get_isoforms(uid)
     isoforms = result.get('isoforms', [])
     if isoforms:
         print(uid, gene)
@@ -154,33 +153,10 @@ for uid, gene in zip(bm_enet.index, bm_enet.Gene):
         print()
 
 for uid, gene in zip(monganq.index, monganq['Protein name']):
-    result = get_uniprot_isoforms(uid)
+    result = get_isoforms(uid)
     isoforms = result.get('isoforms', [])
     if isoforms:
         print(uid, gene)
         pprint.pprint(isoforms)
         print()
 
-# Check metadata
-filepath = 'data/astral/metadata/metadata-all.csv'
-metadata = pd.read_csv(filepath, index_col=0)
-metadata.Study.value_counts()
-
-filepath = 'data/astral/raw/reprocessed-data.csv'
-reprocessed = pd.read_csv(filepath, index_col=0)
-reprocessed.head()
-reprocessed.shape
-
-for id in reprocessed.columns:
-    print(id)
-
-# 645 samples (including 5 QC samples): LYRIKS (402), SCZ (196), BP (41)
-file = 'data/astral/processed/lyriks402-processed.csv'
-
-### Plot peptides ###
-
-filepath = 'data/astral/raw/report.pr_matrix.csv'
-pr_matrix = pd.read_csv(filepath, index_col=0)
-
-
-filepath = 'data/astral/raw/report.peptides.csv'
