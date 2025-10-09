@@ -8,6 +8,7 @@ import anndata as ad
 import scanpy as sc 
 import statsmodels.api as sm
 
+from itertools import chain
 from dataclasses import dataclass, field
 from scipy.stats import f, ttest_ind, ttest_rel, rankdata, norm
 from sklearn.decomposition import PCA
@@ -149,6 +150,7 @@ file = 'data/astral/processed/metadata-lyriks407.csv'
 md = pd.read_csv(file, index_col=0, header=0)
 md = md[md.label != 'QC']
 md['period'] = md['period'].astype(int)
+
 
 # Model 1A: cvt (M0) v.s. non-cvt (M0)
 # Prognostic markers
@@ -983,6 +985,202 @@ for filepath in filepaths:
     filepath = filepath.replace('.tsv', '.csv')
     data.to_csv(filepath, index=False)
 
+##### Biomarker analysis #####
+
+# TODO: Check ANCOVA signature is within Mongan's quantified
+filepath = 'data/tmp/biomarkers/biomarkers-ancova.csv'
+bm_ancova = pd.read_csv(filepath, index_col=0)
+
+filepath = "data/tmp/biomarkers/biomarkers-elasticnet.csv"
+bm_enet = pd.read_csv(filepath, index_col=0)
+
+filepath = 'data/astral/etc/mongan-etable5.csv'
+mongan = pd.read_csv(filepath, index_col=0)
+mongan_prots162 = mongan.index[mongan.index.isin(lyriks.columns)]
+mongan_prots35 = mongan.index[mongan.q < 0.05]
+in_astral = mongan_prots35.isin(lyriks.columns)
+missing_astral = mongan_prots35[~in_astral]
+mongan_prots33 = mongan_prots35[in_astral]
+mongan_prots10 = pd.Index([
+    'P01023', 'P01871', 'P04003', 'P07225', 'P23142',
+    'P02766', 'Q96PD5', 'P02774', 'P10909', 'P13671'
+])
+in_astral10 = mongan_prots10.isin(lyriks.columns)
+mongan_prots10 = mongan_prots10[in_astral10]
+
+len(bm_ancova.index)
+len(bm_enet.index)
+
+ancova_notin_mongan = bm_ancova.index[~bm_ancova.index.isin(mongan.index)]
+enet_notin_mongan = bm_enet.index[~bm_enet.index.isin(mongan.index)]
+
+anc_notin_avg_value = pd.DataFrame({
+    'Average log intensity': lyriks_1a[bm_ancova.index].mean(axis=0),
+    'Quantified': ~bm_ancova.index.isin(ancova_notin_mongan), 
+    'Group': 'ANCOVA'
+})
+enet_notin_avg_value = pd.DataFrame({
+    'Average log intensity': lyriks_1a[bm_enet.index].mean(axis=0),
+    'Quantified': ~bm_enet.index.isin(enet_notin_mongan), 
+    'Group': 'Elastic Net'
+})
+mongan_avg_value = pd.DataFrame({
+    'Average log intensity': lyriks_1a[mongan_prots33].mean(axis=0),
+    'Quantified': True,
+    'Group': 'Mongan'
+})
+avg_value = pd.concat([anc_notin_avg_value, enet_notin_avg_value, mongan_avg_value])
+
+avg_value['Label'] = avg_value['Group'] + ' (' + avg_value['Quantified'].map({True: 'in', False: 'not in'}) + ' Mongan)'
+
+# Investigate percentage of zeros these biomarkers initially had
+lyriks_raw = reprocessed.loc[:, reprocessed.columns.str.startswith('L')]
+pct_missing = (lyriks_raw == 0).sum(axis=1) / lyriks_raw.shape[1]
+avg_value['Missingness'] = pct_missing[avg_value.index].values
+
+plt.figure(figsize=(12,6))
+sns.stripplot(
+    data=avg_value, x='Label', y='Average log intensity', hue='Group',
+    jitter=True, dodge=False, order=None
+)
+filepath = 'tmp/astral/lyriks402/fig/biomarkers-avg_expr.pdf'
+plt.savefig(filepath, bbox_inches='tight')
+plt.close()
+
+# TODO: Save bm_svm
+
+# Plot ANCOVA biomarkers of conversion samples over time
+cvt_ancova = lyriks.loc[md.final_label == 'cvt', bm_ancova.index]
+cvt_ancova1 = cvt_ancova.join(md[['sn', 'period']])
+
+fig, axes = plt.subplots(3, 5, figsize=(16, 10))
+axes = axes.flatten()
+for i, uid in enumerate(cvt_ancova.columns):
+    print(i)
+    ax = axes[i]
+    # Plot scatter and line plot of each sample
+    sns.lineplot(
+        data=cvt_ancova1,
+        x='period', y=uid, hue='sn',
+        marker='o', legend=False,
+        ax=ax
+    )
+
+plt.suptitle('LYRIKS (ANCOVA) biomarkers')
+filepath = 'tmp/astral/lyriks402/fig/biomarkers-ancova-cvt.pdf'
+plt.tight_layout()
+plt.savefig(filepath)
+
+# Non-converters
+noncvt_ancova = lyriks.loc[md.final_label != 'cvt', bm_ancova.index]
+noncvt_ancova1 = noncvt_ancova.join(md[['sn', 'period']])
+
+fig, axes = plt.subplots(3, 5, figsize=(16, 10))
+axes = axes.flatten()
+for i, uid in enumerate(noncvt_ancova.columns):
+    print(i)
+    ax = axes[i]
+    # Plot scatter and line plot of each sample
+    sns.lineplot(
+        data=noncvt_ancova1,
+        x='period', y=uid, hue='sn',
+        marker='o', legend=False,
+        ax=ax
+    )
+
+plt.suptitle('LYRIKS (ANCOVA) biomarkers')
+filepath = 'tmp/astral/lyriks402/fig/biomarkers-ancova-noncvt.pdf'
+plt.tight_layout()
+plt.savefig(filepath)
+
+### LYRIKS (elastic net) biomarkers
+# Converters
+cvt_enet = lyriks.loc[md.final_label == 'cvt', bm_enet.index]
+cvt_enet1 = cvt_enet.join(md[['sn', 'period']])
+
+fig, axes = plt.subplots(3, 4, figsize=(14, 10))
+axes = axes.flatten()
+for i, uid in enumerate(cvt_enet.columns):
+    print(i)
+    ax = axes[i]
+    # Plot scatter and line plot of each sample
+    sns.lineplot(
+        data=cvt_enet1,
+        x='period', y=uid, hue='sn',
+        marker='o', legend=False,
+        ax=ax
+    )
+
+plt.suptitle('LYRIKS (elastic net) biomarkers')
+filepath = 'tmp/astral/lyriks402/fig/biomarkers-enet-cvt.pdf'
+plt.tight_layout()
+plt.savefig(filepath)
+
+# Non-Converters
+noncvt_enet = lyriks.loc[md.final_label != 'cvt', bm_enet.index]
+noncvt_enet1 = noncvt_enet.join(md[['sn', 'period']])
+
+fig, axes = plt.subplots(3, 4, figsize=(14, 10))
+axes = axes.flatten()
+for i, uid in enumerate(noncvt_enet.columns):
+    print(i)
+    ax = axes[i]
+    # Plot scatter and line plot of each sample
+    sns.lineplot(
+        data=noncvt_enet1,
+        x='period', y=uid, hue='sn',
+        marker='o', legend=False,
+        ax=ax
+    )
+
+plt.suptitle('LYRIKS (elastic net) biomarkers')
+filepath = 'tmp/astral/lyriks402/fig/biomarkers-enet-noncvt.pdf'
+plt.tight_layout()
+plt.savefig(filepath)
+
+# TODO: Investigate prediction proba and t2c
+
+t2c = md.loc[~md.month_of_conversion.isna(), ['sn', 'month_of_conversion']]
+t2c.index = t2c.index.str.replace('_24', '_0')
+
+filepath = 'tmp/astral/lyriks402/new/pickle/test-sample_ids.csv'
+test_ids = pd.read_csv(filepath, index_col=0, header=None).index
+test_ids
+
+# Elastic Net 
+filepath = 'tmp/astral/lyriks402/new/pickle/1a-elasticnet-elasticnet-bal-nestedkfold.pkl'
+with open(filepath, 'rb') as file:
+    result = pickle.load(file)
+
+probas = list(chain.from_iterable(result.probas))
+probas = pd.Series(probas, index=test_ids, name='proba')
+enet_probas = t2c.join(probas)
+
+sns.scatterplot(data=enet_probas, x='month_of_conversion', y='proba')
+plt.title('LYRIKS (elastic net)')
+plt.xlabel('Time to conversion (months)')
+filepath = 'tmp/astral/lyriks402/fig/enet-proba-t2c.pdf'
+plt.savefig(filepath)
+plt.close()
+
+# ANCOVA
+filepath = 'tmp/astral/lyriks402/new/pickle/1a-prognostic_ancova-elasticnet-bal-kfold.pkl'
+with open(filepath, 'rb') as file:
+    result = pickle.load(file)
+
+probas = list(chain.from_iterable(result.probas))
+probas = pd.Series(probas, index=test_ids, name='proba')
+ancova_probas = t2c.join(probas)
+
+sns.scatterplot(data=ancova_probas, x='month_of_conversion', y='proba')
+plt.title('LYRIKS (ANCOVA)')
+plt.xlabel('Time to conversion (months)')
+filepath = 'tmp/astral/lyriks402/fig/ancova-proba-t2c.pdf'
+plt.savefig(filepath)
+plt.close()
+
+enet_probas
+ancova_probas
 
 ##### P-value #####
 

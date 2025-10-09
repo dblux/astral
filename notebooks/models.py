@@ -344,23 +344,26 @@ cross_validators = {
 
 # Run detail
 np.random.seed(0)
-n_perms = 1000
+n_perms = 1
+test_idxs = []
 for j in range(n_perms):
     result = Result({
         'version': '1a',
-        'selector': 'random15',
+        'selector': 'prognostic_ancova',
         'model': 'elasticnet-bal',
         'class_weight': 'balanced',
         'validator': 'kfold',
         'snapshot': {}, 
     })
-    rnd_idx = np.random.choice(X.shape[1], 15, replace=False)
-    result.features = rnd_idx
-    print(result.features)
+    if result.metadata['selector'] == 'random15':
+        rnd_idx = np.random.choice(X.shape[1], 15, replace=False)
+        result.features = rnd_idx
+        print(result.features)
     cross_validator = cross_validators[result.metadata['validator']]
     for i, (train_idx, test_idx) in enumerate(cross_validator.split(X, y)):
         print(f"Fold: {i}")
         print('---------------')
+        test_idxs.extend(test_idx)
         # Split data into train and test
         train_sids = X.index[train_idx]
         X_train, X_test = X.iloc[train_idx].values, X.iloc[test_idx].values
@@ -539,17 +542,21 @@ for j in range(n_perms):
         'model': repr(model),
         'validator': repr(cross_validator),
     })
-    # Save
-    name = (
-        f'{result.metadata["version"]}-'
-        f'{result.metadata["selector"]}-'
-        f'{result.metadata["model"]}-'
-        f'{result.metadata["validator"]}'
-    )
-    filename = f'tmp/astral/lyriks402/new/pickle/random15/{name}-{j}.pkl'
-    with open(filename, 'wb') as file:
-        pickle.dump(result, file)
-    print(filename)
+    # # Save
+    # name = (
+    #     f'{result.metadata["version"]}-'
+    #     f'{result.metadata["selector"]}-'
+    #     f'{result.metadata["model"]}-'
+    #     f'{result.metadata["validator"]}'
+    # )
+    # filename = f'tmp/astral/lyriks402/new/pickle/random15/{name}-{j}.pkl'
+    # with open(filename, 'wb') as file:
+    #     pickle.dump(result, file)
+    # print(filename)
+
+# Save to file
+filepath = 'tmp/astral/lyriks402/new/pickle/test-sample_ids.csv'
+X.index[test_idxs].to_series().to_csv(filepath, header=False, index=False)
 
 
 # Nested k-fold cross-validation for feature selection by elasticnet
@@ -567,6 +574,7 @@ for i, (train_out_idx, test_out_idx) in enumerate(
     print('===============')
     print(f"Outer fold: {i}")
     print('===============')
+    print(test_out_idx)
     match result.metadata:
         case {'model': 'elasticnet'}:
             outer_model = LogisticRegression(
