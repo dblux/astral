@@ -15,7 +15,8 @@
 ggplot_pca <- function(
   X,
   metadata,
-  cex = 2,
+  cex = 1,
+  alpha = 1,
   label = FALSE,
   newdata = NULL,
   x = "PC1", y = "PC2",
@@ -55,13 +56,10 @@ ggplot_pca <- function(
   
   # Plot text labels instead of points
   if (label) {
-    return(
-      ax +
-        geom_text(col = "black", cex = cex)
-    )
+    return(ax + geom_text(col = "black", cex = cex))
   }
 
-  ax + geom_point(cex = cex, show.legend = show.legend)
+  ax + geom_point(cex = cex, alpha = alpha, show.legend = show.legend)
 }
 
 

@@ -151,12 +151,18 @@ md = pd.read_csv(file, index_col=0, header=0)
 md = md[md.label != 'QC']
 md['period'] = md['period'].astype(int)
 
-
 # Model 1A: cvt (M0) v.s. non-cvt (M0)
 # Prognostic markers
 # Only M0 and exclude ctrl samples
 md_1a = md[(md.final_label != 'ctrl') & (md.period == 0)].copy()
 lyriks_1a = lyriks.loc[md_1a.index]
+# md.period = md.period.astype(str)
+md_1a.rename(columns={'final_label': 'Label'}, inplace=True)
+md_1a.Label = md_1a.Label.replace({
+    'rmt': 'Non-convert',
+    'mnt': 'Non-convert',
+    'cvt': 'Convert'
+})
 
 ### Mongan et al.
 # P02489 is not in reprocessed data (not detected)
@@ -180,15 +186,6 @@ filepath = "tmp/astral/lyriks402/new/biomarkers/biomarkers-elasticnet.csv"
 enet_signature = pd.read_csv(filepath, index_col=0)
 bm_enet = enet_signature.index
 
-# Subset
-# md.period = md.period.astype(str)
-md_1a.rename(columns={'final_label': 'Label'}, inplace=True)
-md_1a.Label = md_1a.Label.replace({
-    'rmt': 'Non-convert',
-    'mnt': 'Non-convert',
-    'cvt': 'Convert'
-})
-
 
 # TODO: Explore association with time samples were taken
 
@@ -200,12 +197,14 @@ apo_genes = lyriks_symbol.columns[
 serpin_genes = lyriks_symbol.columns[
     lyriks_symbol.columns.str.startswith('SERPIN', na=False)]
 itih_genes = lyriks_symbol.columns[
-    lyriks_symbol.columns.str.startswith('ITIH', na=False) | 
-    lyriks_symbol.columns.isin(['AMBP', 'SPINT2'])
+    lyriks_symbol.columns.str.startswith('ITIH', na=False)
 ]
+# itih_genes = lyriks_symbol.columns[
+#     lyriks_symbol.columns.str.startswith('ITIH', na=False) | 
+#     lyriks_symbol.columns.isin(['AMBP', 'SPINT2'])
+# ]
 znf_genes = lyriks_symbol.columns[
     lyriks_symbol.columns.str.startswith('ZNF', na=False)]
-
 complement_proteins = reprocessed.loc[
     reprocessed.Description.str.startswith('Complement', na=False)]
 complement_genes = complement_proteins.Gene
@@ -238,18 +237,19 @@ mongan_coagulation = {'F11': "'"}
 #     reprocessed.Description.str.startswith('Immunoglobulin', na=False)]
 # ig_genes = ig_proteins.Gene
 
-family = 'coagulation'
-genes = coagulation_genes
-astral_set = astral_coagulation
-mongan_set = mongan_coagulation
+family = 'itih'
+genes = itih_genes
+astral_set = astral_itih
+mongan_set = mongan_itih
 
 lyriks_family = lyriks_symbol.loc[md_1a.index, genes]
 lyriks_family = lyriks_family.assign(sample_id=lyriks_family.index)
 lyriks_family = lyriks_family.join(md_1a[['Label', 'age', 'gender']], how='left')
 lyriks_family_long = lyriks_family.melt(
     id_vars=['sample_id', 'Label', 'age', 'gender'],
-    var_name='Gene', value_name='Expression value'
+    var_name='Gene', value_name='Log intensity'
 )
+lyriks_family
 
 # Order by ANCOVA pvalue
 pvalues = []
@@ -267,6 +267,8 @@ sig = pd.DataFrame(
     {'p': pvalues, 'q': qvalues},
     index=genes
 ).sort_values(by='q', ascending=True)
+
+sig = sig.sort_index()
 # filepath = f'tmp/astral/lyriks402/fig/families/{family}-qvalues.csv'
 # sig.to_csv(filepath)
 
@@ -278,23 +280,24 @@ lyriks_family_long['Gene'] = pd.Categorical(
 )
 print(len(genes))
 
-fig, axes = plt.subplots(2, 4, figsize=(12, 6))
+fig, axes = plt.subplots(1, 4, figsize=(10, 3))
 axes = axes.flatten()
 for i, gene in enumerate(sig.index):
     print(gene)
     sns.stripplot(
         data=lyriks_family_long[lyriks_family_long['Gene'] == gene],
-        x='Label', y='Expression value', hue='Label',
+        x='Label', y='Log intensity', hue='Label',
         ax=axes[i], jitter=True, legend=False,
         order=['Non-convert', 'Convert']
     )
     # Determine title
     title = gene
-    if gene in astral_set:
-        title += '*'
-    if gene in mongan_set:
-        title += mongan_set[gene]
-    title = f'{title} (p = {sig.loc[gene, "p"]:.3f})'
+    # if gene in astral_set:
+    #     title += '*'
+    # if gene in mongan_set:
+    #     title += mongan_set[gene]
+    # title = f'{title} (p = {sig.loc[gene, "p"]:.3f})'
+    title = f'{title} (p < 0.001)'
     axes[i].set_title(title)
     axes[i].set_xlabel('')
 
@@ -302,10 +305,10 @@ for j in range(len(genes), len(axes)):
     fig.delaxes(axes[j])  # Remove empty subplot
 
 plt.tight_layout()
-filepath = f'tmp/astral/lyriks402/fig/families/{family}-jitter1.pdf'
-plt.show()
-
+filepath = f'tmp/astral/lyriks402/fig/families/jitter-{family}.pdf'
 plt.savefig(filepath)
+
+plt.show()
 
 
 g = sns.FacetGrid(

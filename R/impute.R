@@ -38,7 +38,7 @@ impute.MinProb = function(dataSet.mvs,q = 0.01,tune.sigma = 1){
   protSD = apply(dataSet.filtered,1,sd,na.rm = T)
   sd.temp = median(protSD,na.rm = T)*tune.sigma
   
-  print(sd.temp)
+  # print(sd.temp)
   
   for (i in 1:(nSamples)){
     
