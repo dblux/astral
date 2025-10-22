@@ -59,7 +59,7 @@ print(gene_symbol %in% unique(data$Genes))
 
 # Filter data for just peptides mapping to gene of interest
 data_fltr <- data[data$Genes == gene_symbol, ]
-head(data_fltr)
+tail(data_fltr)
 dim(data_fltr)
 
 whole_seq <- data.frame(
@@ -78,6 +78,17 @@ matching_result <- match_and_calculate_positions(
 )
 # colnames(matching_result)[1] <- "Sequence" # To avoid error
 dim(matching_result)
+tail(matching_result)
+
+# Manual mapping to unique exons of spliceoforms
+matching_result <- match_and_calculate_positions(
+  data_fltr,
+  column = "Stripped.Sequence", # name of column with sequence
+  whole_seq,
+  match_columns = c("Genes"), # match column from data with whole_seq
+  column_keep = c("Polypeptide.Novogene.ID", "label", "Global.Q.Value", "Precursor.Normalised") # information to keep 
+)
+head(matching_result)
 
 # TODO: Raise issue - Allow matching_result to not have reps and PTM_position
 matching_result$reps <- NA
@@ -104,6 +115,8 @@ data_avg <- data_with_quantification %>%
   summarise(PSM = mean(PSM, na.rm = TRUE), .groups = "keep") %>%
   arrange(label, Position) %>%
   as.data.table()
+
+data_avg
 
 # Domain information
 domain <- itih4_1$exons

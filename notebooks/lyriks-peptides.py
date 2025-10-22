@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from statsmodels.formula.api import ols
 from statsmodels.stats.multitest import multipletests
 
-from notebooks.getters import get_isoforms
+from notebooks.getters import get_isoforms, get_exon_coordinates
 
 file = 'data/astral/processed/combat_knn5_lyriks-605_402.csv'
 lyriks = pd.read_csv(file, index_col=0, header=0).T
@@ -125,8 +125,12 @@ plt.close()
 
 plt.show()
 
-
+itih1_1_uid = "P19827-1"
 itih2_1_uid = 'P19823'
-results = get_isoforms(itih2_1_uid)
+results = get_isoforms(itih1_1_uid)
 results
+
+kng1_2_uid = "P01042-2"
+exons = get_exon_coordinates(kng1_2_uid)
+print(exons)
 

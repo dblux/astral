@@ -47,9 +47,11 @@ def get_exon_coordinates(uniprot_id, tax_id=None):
         params["taxid"] = tax_id
     response = requests.get(
         base_url, params=params,
-        headers={"Accept": "application/json"}
+        headers={"Accept": "application/json"},
+        timeout=10
     )
     response.raise_for_status()
+    print(f"Status code: {response.status_code}")
     data = response.json()
     assert isinstance(data, list) and len(data) == 1
     entry = data[0]
