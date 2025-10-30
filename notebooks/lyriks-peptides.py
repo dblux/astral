@@ -134,3 +134,101 @@ kng1_2_uid = "P01042-2"
 exons = get_exon_coordinates(kng1_2_uid)
 print(exons)
 
+
+
+### Peptide-level analysis
+
+file = "data/tmp/zhihao/gene-entropy_isoform.tsv"
+genes = pd.read_table(file, index_col=0)
+genes.head()
+
+file = 'data/tmp/biomarkers/biomarkers-ancova.csv'
+bm_ancova = pd.read_csv(file, index_col=2)
+bm_ancova.head()
+
+file = 'data/tmp/biomarkers/biomarkers-elasticnet.csv'
+bm_enet = pd.read_csv(file, index_col=2)
+bm_enet.head()
+
+genes['in_ancova'] = genes.index.isin(bm_ancova.index)
+genes['in_enet'] = genes.index.isin(bm_enet.index)
+
+file = 'tmp/astral/peptides/bm-ancova.csv'
+genes.loc[genes.in_ancova].drop(['in_ancova', 'in_enet'], axis=1).to_csv(file)
+
+file = 'tmp/astral/peptides/bm-enet.csv'
+genes.loc[genes.in_enet].drop(['in_ancova', 'in_enet'], axis=1).to_csv(file)
+
+# Retaining proteins with at least n peptides (for entropy)
+n_total = 6
+genes_supp = genes[genes.Total >= n_total]
+genes_supp.has_isoform.value_counts() # T: 98, F: 118
+
+# Plot no. of peptides mapping to proteins
+isoforms_20 = genes.loc[genes.has_isoform].sort_values('DE_count', ascending=False).head(20)
+fig, ax = plt.subplots(figsize=(10, 5))
+sns.barplot(
+    data=isoforms_20,
+    x=isoforms_20.index,
+    y='DE_count',
+    hue='has_isoform',
+    ax=ax,
+)
+ax.set_xticklabels(ax.get_xticklabels(), rotation=90, ha='right')
+ax.set_xlabel('')
+ax.set_ylabel('Number of DE peptides')
+filepath = f"tmp/astral/peptides/fig/barplot-isoforms20.png"
+plt.savefig(filepath, dpi=300, bbox_inches="tight")
+
+sns.histplot(
+    data=genes_supp,
+    x='Entropy',
+    hue='has_isoform',
+    # stat='density',
+    # common_norm=True,
+    bins=15,
+    multiple='dodge',
+)
+plt.title(f'Proteins (>= {n_total} peptides)')
+filepath = f"tmp/astral/peptides/fig/hist-entropy.png"
+plt.savefig(filepath, dpi=300, bbox_inches="tight")
+
+# Comparing proteins in LYRIKS (ANCOVA) v.s. rest
+# bm_ancova.index.isin(genes.index).sum()  # 15
+genes_supp['in_ancova'] = genes_supp.index.isin(bm_ancova.index)
+ctab = pd.crosstab(genes_supp.has_isoform, genes_supp.in_ancova)
+print(ctab)
+genes_supp.loc[genes_supp.in_ancova, ["Entropy", "has_isoform"]]
+genes_supp.loc[genes_supp.in_ancova]
+
+plt.figure(figsize=(6, 3))
+ax = sns.histplot(
+    data=genes_supp,
+    x='Entropy',
+    hue='in_ancova',
+    multiple='dodge',
+)
+ax.get_legend().set_title('In ANCOVA')
+plt.title(f'Proteins (>= {n_total} peptides)')
+# save fig
+filepath = "tmp/astral/peptides/fig/hist_lyriks-entropy.png"
+plt.savefig(filepath, dpi=300, bbox_inches="tight")
+plt.close()
+
+plt.figure(figsize=(6, 3))
+ax = sns.kdeplot(
+    data=genes_supp,
+    x='Entropy',
+    hue='in_ancova',
+    common_norm=False,
+    clip=(0, 1),
+    palette={True: 'red', False: 'gray'},
+)
+ax.get_legend().set_title('In ANCOVA')
+plt.title(f'Proteins (>= {n_total} peptides)')
+# save fig
+filepath = "tmp/astral/peptides/fig/kde_lyriks-entropy.png"
+plt.savefig(filepath, dpi=300, bbox_inches="tight")
+plt.close()
+
+
